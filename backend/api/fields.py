@@ -16,52 +16,80 @@ async def get_suggestions(request: SuggestionRequest) -> SuggestionResponse:
     config = get_config()
     db = get_db()
 
+    if not config.suggestions.enabled:
+        return SuggestionResponse(suggestions=[])
+
     dataset_row = await db.fetchone("SELECT id FROM datasets WHERE name = ?", (config.dataset.name,))
     if not dataset_row:
         return SuggestionResponse(suggestions=[])
 
     dataset_id = dataset_row["id"]
     field_name = request.field_name
-    query = request.query
-    limit = request.limit
+    query = (request.query or "").strip()
+    limit = min(request.limit or config.suggestions.max_suggestions, config.suggestions.max_suggestions)
 
-    if config.suggestions.case_insensitive:
-        normalized_query = query.lower()
-        sql_query = """
-            SELECT category_value, count FROM field_categories
-            WHERE dataset_id = ? AND field_name = ? AND normalized_value LIKE ?
-            ORDER BY count DESC LIMIT ?
-        """
-        params = (dataset_id, field_name, f"%{normalized_query}%", limit)
-    else:
-        sql_query = """
-            SELECT category_value, count FROM field_categories
-            WHERE dataset_id = ? AND field_name = ? AND category_value LIKE ?
-            ORDER BY count DESC LIMIT ?
-        """
-        params = (dataset_id, field_name, f"%{query}%", limit)
+    field_config = next((f for f in config.fields if f.name == field_name), None)
+    if field_config and not field_config.provide_suggestions:
+        return SuggestionResponse(suggestions=[])
 
-    if config.suggestions.ranking == "recency":
-        sql_query = sql_query.replace("ORDER BY count DESC", "ORDER BY created_at DESC")
-    elif config.suggestions.ranking == "alphabetical":
-        sql_query = sql_query.replace("ORDER BY count DESC", "ORDER BY category_value ASC")
+    ci = field_config.case_insensitive if field_config else True
+    q = query.lower() if ci else query
 
-    rows = await db.fetchall(sql_query, params)
-    suggestions = [row["category_value"] for row in rows]
+    def _hits(value: str) -> bool:
+        if not q:
+            return True
+        return q in (value.lower() if ci else value)
 
-    if config.suggestions.fuzzy_threshold < 1.0 and query:
-        all_rows = await db.fetchall(
-            "SELECT category_value FROM field_categories WHERE dataset_id = ? AND field_name = ?",
-            (dataset_id, field_name)
-        )
-        all_values = [row["category_value"] for row in all_rows]
-        fuzzy_suggestions = _fuzzy_match(query, all_values, config.suggestions.fuzzy_threshold, limit)
+    # 1) Ranked entries from the field_categories corpus.
+    ranking = config.suggestions.ranking
+    order_by = {
+        "frequency": "count DESC",
+        "alphabetical": "category_value ASC",
+        "recency": "created_at DESC",
+    }.get(ranking, "count DESC")
+    rows = await db.fetchall(
+        f"""SELECT category_value FROM field_categories
+            WHERE dataset_id = ? AND field_name = ?
+            ORDER BY {order_by}""",
+        (dataset_id, field_name)
+    )
+    combined: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        value = row["category_value"]
+        norm = value.lower() if ci else value
+        if norm not in seen and _hits(value):
+            seen.add(norm)
+            combined.append(value)
+
+    # 2) Also mine values already stored on annotations (works even before any
+    #    category was manually recorded). Frequency-sorted like categories.
+    af_rows = await db.fetchall(
+        """SELECT af.field_value AS value, COUNT(*) AS cnt
+           FROM annotation_fields af
+           JOIN annotations a ON a.id = af.annotation_id
+           JOIN data_items di ON di.id = a.data_item_id
+           WHERE di.dataset_id = ? AND af.field_name = ? AND af.field_value IS NOT NULL
+           GROUP BY af.field_value
+           ORDER BY cnt DESC""",
+        (dataset_id, field_name)
+    )
+    for row in af_rows:
+        value = row["value"]
+        if value is None:
+            continue
+        norm = value.lower() if ci else value
+        if norm not in seen and _hits(value):
+            seen.add(norm)
+            combined.append(value)
+
+    if config.suggestions.fuzzy_threshold < 1.0 and q:
+        fuzzy_suggestions = _fuzzy_match(query, combined, config.suggestions.fuzzy_threshold, limit)
         for s in fuzzy_suggestions:
-            if s not in suggestions:
-                suggestions.append(s)
-        suggestions = suggestions[:limit]
+            if s not in combined:
+                combined.append(s)
 
-    return SuggestionResponse(suggestions=suggestions)
+    return SuggestionResponse(suggestions=combined[:limit])
 
 
 def _fuzzy_match(query: str, values: list[str], threshold: float, limit: int) -> list[str]:

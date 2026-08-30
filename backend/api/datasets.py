@@ -89,16 +89,86 @@ async def open_dataset(request: DatasetOpenRequest) -> dict[str, Any]:
 async def get_dataset_tree(dataset_id: int) -> dict[str, Any]:
     """Return a nested folder/file tree plus a flat, ordered item list."""
     db = get_db()
+    dataset_row = await db.fetchone("SELECT * FROM datasets WHERE id = ?", (dataset_id,))
+    if not dataset_row:
+        raise HTTPException(404, "Dataset not found")
+
     items = await db.fetchall(
         "SELECT * FROM data_items WHERE dataset_id = ? ORDER BY sort_order",
         (dataset_id,)
     )
+
+    nodes: list[dict] = []
+    try:
+        cfg = json.loads(dataset_row["config_json"])
+        root = Path(cfg["dataset"]["path"])
+        if root.is_dir():
+            extensions = set(str(e).lower().lstrip("*.") for e in cfg["dataset"]["extensions"])
+            item_map = {str(it["rel_path"]).replace("\\", "/"): it for it in items}
+            nodes = build_tree_fs(root, extensions, item_map)
+        else:
+            nodes = build_tree(items)
+    except Exception:
+        nodes = build_tree(items)
+
     return {
         "dataset_id": dataset_id,
         "total": len(items),
-        "nodes": build_tree(items),
+        "nodes": nodes,
         "items": [DataItemResponse(**item) for item in items],
     }
+
+
+def _sort_tree_nodes(nodes: list[dict]) -> None:
+    nodes.sort(key=lambda n: (0 if n.get("type") == "dir" else 1, str(n.get("name", "")).lower()))
+    for n in nodes:
+        if n.get("children"):
+            _sort_tree_nodes(n["children"])
+
+
+def build_tree_fs(root_path: Path, extensions: set, item_map: dict[str, dict]) -> list[dict]:
+    """Build the full folder stack straight from the filesystem (VS Code style).
+
+    Shows every directory (including empty ones) and only files that are known
+    scanned data items. Hidden folders (e.g. .crops) are skipped.
+    """
+    def walk(dir_path: Path) -> list[dict]:
+        nodes: list[dict] = []
+        try:
+            with os.scandir(dir_path) as it:
+                entries = sorted(it, key=lambda e: str(e.name).lower())
+        except OSError:
+            return nodes
+
+        for entry in entries:
+            name = entry.name
+            if name.startswith("."):
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    nodes.append({"name": name, "type": "dir", "children": walk(Path(entry.path))})
+                elif entry.is_file(follow_symlinks=True):
+                    ext = Path(name).suffix.lower().lstrip(".")
+                    if extensions and ext not in extensions:
+                        continue
+                    rel = str(Path(entry.path).relative_to(root_path)).replace("\\", "/")
+                    it = item_map.get(rel)
+                    if it is None:
+                        continue
+                    nodes.append({
+                        "name": name,
+                        "type": "file",
+                        "item_id": it["id"],
+                        "rel_path": rel,
+                        "status": it["status"],
+                    })
+            except OSError:
+                continue
+        return nodes
+
+    nodes = walk(root_path)
+    _sort_tree_nodes(nodes)
+    return nodes
 
 
 def build_tree(items: list[dict]) -> list[dict]:

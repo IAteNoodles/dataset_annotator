@@ -47,6 +47,27 @@ let currentEnumFieldConfig = null;
 let currentSuggestionField = null;
 let suggestionTimer = null;
 
+// User-created ("Other") field names, persisted so they stay available for
+// every annotation in a session.
+let customFieldRegistry = [];
+try {
+  customFieldRegistry = JSON.parse(localStorage.getItem('datasetAnnotatorCustomFields') || '[]');
+  if (!Array.isArray(customFieldRegistry)) customFieldRegistry = [];
+} catch (e) {
+  customFieldRegistry = [];
+}
+function persistCustomFields() {
+  localStorage.setItem('datasetAnnotatorCustomFields', JSON.stringify(customFieldRegistry));
+}
+function registerCustomField(name) {
+  if (!name) return;
+  const known = new Set(fieldConfigs.map(f => f.name));
+  if (!known.has(name) && !customFieldRegistry.includes(name)) {
+    customFieldRegistry.push(name);
+    persistCustomFields();
+  }
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', init);
 
@@ -440,9 +461,11 @@ function setTool(tool) {
 
 function getImgCoords(e) {
   const rect = canvas.getBoundingClientRect();
+  const sx = rect.width ? canvas.width / rect.width : 1;
+  const sy = rect.height ? canvas.height / rect.height : 1;
   return {
-    x: (e.clientX - rect.left - imageOffset.x) / imageScale,
-    y: (e.clientY - rect.top - imageOffset.y) / imageScale
+    x: ((e.clientX - rect.left) * sx - imageOffset.x) / imageScale,
+    y: ((e.clientY - rect.top) * sy - imageOffset.y) / imageScale
   };
 }
 
@@ -686,7 +709,7 @@ async function onMouseUp(e) {
     currentDrawRect = null;
     
     if (geometry) {
-      createLocalAnnotation(currentTool, geometry);
+      await createAnnotationOnServer(currentTool, geometry);
     }
     
     renderCanvas();
@@ -849,7 +872,40 @@ function isPointInAnnotation(x, y, ann) {
   }
 }
 
-async function createLocalAnnotation(type, geometry) {
+async function createAnnotationOnServer(type, geometry) {
+  try {
+    const r = await fetch(`${API_BASE}/api/annotations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data_item_id: currentDataItemId,
+        annotation_type: type,
+        geometry: { type, coordinates: geometry.coordinates }
+      })
+    });
+    if (r.ok) {
+      const created = await r.json();
+      const ann = {
+        ...created,
+        localOnly: false,
+        dirty: false,
+        fields: {}
+      };
+      annotations.push(ann);
+      selectAnnotation(ann.id);
+      renderAnnotationList();
+      return;
+    }
+    const errText = await r.text();
+    alert('Failed to save annotation: ' + errText);
+    createLocalAnnotation(type, geometry);
+  } catch (e) {
+    console.error('Create annotation error:', e);
+    createLocalAnnotation(type, geometry);
+  }
+}
+
+function createLocalAnnotation(type, geometry) {
   const geom = { type, coordinates: geometry.coordinates };
   
   const localAnn = {
@@ -927,7 +983,12 @@ function renderFieldPanel(fields) {
   
   // User-facing fields from config (/api/fields/config)
   const fieldNames = fieldConfigs.map(f => f.name);
-  
+
+  // User-created fields from previous sessions stay available.
+  customFieldRegistry.forEach(name => {
+    if (!fieldNames.includes(name)) fieldNames.push(name);
+  });
+
   // Add existing custom fields not in config
   Object.keys(fieldsObj).forEach(name => {
     if (!fieldNames.includes(name)) fieldNames.push(name);
@@ -1002,7 +1063,8 @@ async function setupValueWidgetForField(fieldName) {
   input.placeholder = (cfg && cfg.placeholder) ? cfg.placeholder : 'Field value';
   input.disabled = false;
   
-  if (cfg && cfg.provide_suggestions) {
+  // Custom (user-created) fields are free text and get suggestions too.
+  if ((cfg && cfg.provide_suggestions) || (!cfg && customFieldRegistry.includes(fieldName))) {
     currentSuggestionField = fieldName;
   }
   updateAddFieldState();
@@ -1212,6 +1274,9 @@ async function addField() {
   
   const value = getCurrentValue();
   if (!value) { updateAddFieldState(); return; }
+  
+  // Keep user-created fields so they show up for every annotation.
+  registerCustomField(fieldName);
   
   const ann = annotations.find(a => a.id === selectedAnnotationId);
   
