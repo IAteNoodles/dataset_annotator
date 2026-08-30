@@ -23,6 +23,11 @@ class DatasetResponse(BaseModel):
     config_hash: str
     created_at: datetime
     updated_at: datetime
+    path: str | None = None
+
+
+class DatasetOpenRequest(BaseModel):
+    path: str
 
 
 class DatasetListResponse(BaseModel):

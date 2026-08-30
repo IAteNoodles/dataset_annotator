@@ -1,5 +1,7 @@
 /* app.js - Simple plain JS frontend for Dataset Annotator */
 
+const API_BASE = 'http://localhost:8080';
+
 // State
 let canvas = null;
 let ctx = null;
@@ -15,7 +17,13 @@ let currentDrawRect = null;
 let imageScale = 1;
 let imageOffset = { x: 0, y: 0 };
 let totalItems = 0;
-let currentPage = 1;
+
+// Tree/navigation state
+let treeNodes = [];
+let treeItems = [];
+let treeExpanded = new Set();
+let currentItemIndex = -1;
+let currentItemStatus = null;
 
 // Interaction state
 let interactionMode = null; // 'move', 'resize', 'rotate', null
@@ -48,22 +56,26 @@ async function init() {
   
   loadFieldConfigs();
   loadS3ConfigFromStorage();
-  await loadDatasets();
+  await setupDataset();
   setupCanvas();
   setupEventListeners();
   renderCanvas();
 }
 
-async function loadDatasets() {
+async function setupDataset() {
   try {
-    const r = await fetch('http://localhost:8080/api/datasets');
+    const r = await fetch(`${API_BASE}/api/datasets`);
     if (r.ok) {
       const data = await r.json();
       if (data.datasets && data.datasets.length > 0) {
-        currentDatasetId = data.datasets[0].id;
-        document.getElementById('datasetPath').textContent = data.datasets[0].name || 'Dataset';
-        document.getElementById('newAnnotationBtn').disabled = false;
-        await loadDataItems(currentDatasetId);
+        const ds = data.datasets[0];
+        currentDatasetId = ds.id;
+        document.getElementById('datasetPath').textContent = ds.name || 'Dataset';
+        if (ds.path) document.getElementById('folderPathInput').value = ds.path;
+        await loadTree(ds.id);
+      } else {
+        document.getElementById('datasetPath').textContent = 'No dataset yet';
+        setTreeStatus('Enter a folder path above and click Open');
       }
     }
   } catch (e) {
@@ -71,48 +83,213 @@ async function loadDatasets() {
   }
 }
 
-async function loadDataItems(datasetId) {
+async function openFolder() {
+  const pathInput = document.getElementById('folderPathInput');
+  const path = pathInput.value.trim();
+  if (!path) {
+    setTreeStatus('Enter a folder path first');
+    return;
+  }
+  setTreeStatus('Opening ' + path + ' ...');
   try {
-    const r = await fetch(`http://localhost:8080/api/datasets/${datasetId}/items?page=1&page_size=1`);
-    if (r.ok) {
-      const data = await r.json();
-      totalItems = data.total || 0;
-      currentPage = 1;
-      updateNavButtons();
-      if (data.items && data.items.length > 0) {
-        currentDataItemId = data.items[0].id;
-        await loadImage(data.items[0]);
-        await loadAnnotationsFromServer();
-      }
+    const r = await fetch(`${API_BASE}/api/datasets/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+    if (!r.ok) {
+      setTreeStatus('Failed: ' + (await r.text() || r.status));
+      return;
     }
+    const data = await r.json();
+    currentDatasetId = data.dataset_id;
+    document.getElementById('datasetPath').textContent = data.name;
+    document.getElementById('folderPathInput').value = data.path;
+    await loadTree(data.dataset_id);
   } catch (e) {
-    console.error('Failed to load data items:', e);
+    setTreeStatus('Error: ' + e.message);
   }
 }
 
-async function loadItem(page) {
-  if (page < 1 || page > Math.ceil(totalItems / 1)) return;
-  
+async function loadTree(datasetId) {
+  currentDatasetId = datasetId;
   try {
-    const r = await fetch(`http://localhost:8080/api/datasets/${currentDatasetId}/items?page=${page}&page_size=1`);
-    if (r.ok) {
-      const data = await r.json();
-      if (data.items && data.items.length > 0) {
-        currentPage = page;
-        updateNavButtons();
-        currentDataItemId = data.items[0].id;
-        await loadImage(data.items[0]);
-        await loadAnnotationsFromServer();
-      }
+    const r = await fetch(`${API_BASE}/api/datasets/${datasetId}/tree`);
+    if (!r.ok) {
+      setTreeStatus('Failed to load tree');
+      return;
+    }
+    const data = await r.json();
+    treeNodes = data.nodes || [];
+    treeItems = data.items || [];
+    totalItems = treeItems.length;
+    treeExpanded = new Set();
+    seedExpanded(treeNodes, '');
+    renderTree();
+    if (treeItems.length > 0) {
+      setTreeStatus(treeItems.length + ' image(s)');
+      await loadItemAt(0);
+    } else {
+      setTreeStatus('No supported images found in this folder');
     }
   } catch (e) {
-    console.error('Failed to load item:', e);
+    setTreeStatus('Tree error: ' + e.message);
   }
+}
+
+function seedExpanded(nodes, prefix) {
+  nodes.forEach(n => {
+    if (n.type === 'dir') {
+      const key = prefix + '/' + n.name;
+      treeExpanded.add(key);
+      seedExpanded(n.children, key);
+    }
+  });
+}
+
+async function loadItemAt(index) {
+  if (index < 0 || index >= treeItems.length) return;
+  currentItemIndex = index;
+  const item = treeItems[index];
+  currentDataItemId = item.id;
+  currentItemStatus = item.status;
+  await loadImage(item);
+  await loadAnnotationsFromServer();
+  updateNavButtons();
+  updateTreeHighlight(item.id);
 }
 
 function updateNavButtons() {
-  document.getElementById('prevItemBtn').disabled = currentPage <= 1;
-  document.getElementById('nextItemBtn').disabled = currentPage >= totalItems;
+  document.getElementById('prevImgBtn').disabled = currentItemIndex <= 0;
+  document.getElementById('nextImgBtn').disabled = currentItemIndex >= treeItems.length - 1;
+  document.getElementById('markDoneBtn').disabled = currentItemIndex < 0;
+  const counter = document.getElementById('itemCounter');
+  if (counter) counter.textContent = treeItems.length ? (currentItemIndex + 1) + ' / ' + treeItems.length : '0 / 0';
+  updateDoneButton();
+}
+
+function updateDoneButton() {
+  const btn = document.getElementById('markDoneBtn');
+  const done = currentItemStatus === 'done';
+  btn.textContent = done ? 'Unmark Done' : 'Mark Done';
+  btn.classList.toggle('done', done);
+}
+
+async function toggleDone() {
+  if (currentItemIndex < 0) return;
+  const item = treeItems[currentItemIndex];
+  const newStatus = item.status === 'done' ? 'pending' : 'done';
+  try {
+    const r = await fetch(`${API_BASE}/api/datasets/${currentDatasetId}/items/${item.id}/status?status=${encodeURIComponent(newStatus)}`, {
+      method: 'PATCH'
+    });
+    if (r.ok) {
+      item.status = newStatus;
+      currentItemStatus = newStatus;
+      renderTree();
+      updateTreeHighlight(item.id);
+      updateNavButtons();
+    }
+  } catch (e) {
+    console.error('Failed to toggle done:', e);
+  }
+}
+
+function goToItem(delta) {
+  loadItemAt(currentItemIndex + delta);
+}
+
+function renderTree() {
+  const box = document.getElementById('folderTree');
+  box.innerHTML = '';
+  if (!treeNodes.length) {
+    const empty = document.createElement('div');
+    empty.className = 'tree-empty';
+    empty.textContent = 'No images yet. Enter a folder path above and click Open.';
+    box.appendChild(empty);
+    return;
+  }
+  const ul = renderTreeNodes(treeNodes, '');
+  if (ul) box.appendChild(ul);
+}
+
+function renderTreeNodes(nodes, prefix) {
+  if (!nodes || !nodes.length) return null;
+  const ul = document.createElement('ul');
+  ul.className = 'tree-list';
+  nodes.forEach(n => {
+    const li = document.createElement('li');
+    li.className = 'tree-node ' + n.type;
+    if (n.type === 'dir') {
+      const key = prefix + '/' + n.name;
+      const open = treeExpanded.has(key);
+      if (open) li.classList.add('open');
+      li.dataset.dir = key;
+      const caret = document.createElement('span');
+      caret.className = 'tree-caret';
+      caret.textContent = open ? '▾' : '▸';
+      const name = document.createElement('span');
+      name.className = 'tree-name';
+      name.textContent = n.name;
+      li.appendChild(caret);
+      li.appendChild(name);
+      if (open) {
+        const sub = renderTreeNodes(n.children, key);
+        if (sub) li.appendChild(sub);
+      }
+    } else {
+      if (n.status === 'done') li.classList.add('done');
+      li.dataset.item = n.item_id;
+      const status = document.createElement('span');
+      status.className = 'tree-status';
+      status.textContent = n.status === 'done' ? '✓' : '';
+      const name = document.createElement('span');
+      name.className = 'tree-name';
+      name.textContent = n.name;
+      li.appendChild(status);
+      li.appendChild(name);
+    }
+    ul.appendChild(li);
+  });
+  return ul;
+}
+
+function updateTreeHighlight(itemId) {
+  const box = document.getElementById('folderTree');
+  box.querySelectorAll('.tree-node.file.active').forEach(el => el.classList.remove('active'));
+  const li = box.querySelector('.tree-node.file[data-item="' + itemId + '"]');
+  if (li) {
+    li.classList.add('active');
+    li.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function onTreeClick(e) {
+  const li = e.target.closest('li.tree-node');
+  if (!li) return;
+  if (li.classList.contains('dir')) {
+    const key = li.dataset.dir;
+    if (treeExpanded.has(key)) treeExpanded.delete(key);
+    else treeExpanded.add(key);
+    renderTree();
+    if (treeItems[currentItemIndex]) updateTreeHighlight(treeItems[currentItemIndex].id);
+  } else if (li.classList.contains('file')) {
+    const idx = treeItems.findIndex(i => i.id === Number(li.dataset.item));
+    if (idx >= 0) loadItemAt(idx);
+  }
+}
+
+function setTreeStatus(msg) {
+  const el = document.getElementById('treeStatus');
+  if (el) el.textContent = msg || '';
+}
+
+function toggleOperations() {
+  const panel = document.getElementById('operationsPanel');
+  const btn = document.getElementById('operationsToggleBtn');
+  const open = panel.style.display === 'block';
+  panel.style.display = open ? 'none' : 'block';
+  btn.textContent = open ? 'Operations ▸' : 'Operations ▾';
 }
 
 async function loadImage(item) {
@@ -133,12 +310,12 @@ async function loadImage(item) {
     currentImage = null;
     renderCanvas();
   };
-  img.src = `http://localhost:8080/api/images/${item.id}`;
+  img.src = `${API_BASE}/api/images/${item.id}`;
 }
 
 async function loadAnnotationsFromServer() {
   try {
-    const r = await fetch(`http://localhost:8080/api/data-items/${currentDataItemId}/annotations`);
+    const r = await fetch(`${API_BASE}/api/data-items/${currentDataItemId}/annotations`);
     if (r.ok) {
       const serverAnns = await r.json();
       annotations = serverAnns.map(ann => ({
@@ -170,14 +347,24 @@ function setupEventListeners() {
   document.getElementById('toolPoint').addEventListener('click', () => setTool('point'));
   document.getElementById('toolLine').addEventListener('click', () => setTool('line'));
 
+  // Folder + tree
+  document.getElementById('openFolderBtn').addEventListener('click', openFolder);
+  document.getElementById('folderPathInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); openFolder(); }
+  });
+  document.getElementById('folderTree').addEventListener('click', onTreeClick);
+
   // Navigation
-  document.getElementById('prevItemBtn').addEventListener('click', () => loadItem(currentPage - 1));
-  document.getElementById('nextItemBtn').addEventListener('click', () => loadItem(currentPage + 1));
+  document.getElementById('prevImgBtn').addEventListener('click', () => goToItem(-1));
+  document.getElementById('nextImgBtn').addEventListener('click', () => goToItem(1));
+  document.getElementById('markDoneBtn').addEventListener('click', toggleDone);
 
   // Actions
-  document.getElementById('newAnnotationBtn').addEventListener('click', createNewAnnotation);
   document.getElementById('clearAllBtn').addEventListener('click', clearAllAnnotations);
   document.getElementById('resetDbBtn').addEventListener('click', resetEntireDb);
+
+  // Operations toggle
+  document.getElementById('operationsToggleBtn').addEventListener('click', toggleOperations);
 
   // Lock/unlock/delete
   document.getElementById('lockBtn').addEventListener('click', () => toggleLock(true));
@@ -685,7 +872,7 @@ async function loadAnnotationFields(annId) {
     }
     
     // Server annotation - fetch from API
-    const r = await fetch(`http://localhost:8080/api/annotations/${annId}`);
+    const r = await fetch(`${API_BASE}/api/annotations/${annId}`);
     if (r.ok) {
       const data = await r.json();
       const fields = data.fields || {};
@@ -740,7 +927,7 @@ function renderFieldPanel(fields) {
 }
 
 function loadFieldConfigs() {
-  fetch('http://localhost:8080/api/fields/config')
+  fetch(`${API_BASE}/api/fields/config`)
     .then(r => r.json())
     .then(configs => {
       // Keep only user-facing fields (skip internal / hidden / json fields)
@@ -796,7 +983,7 @@ async function setupEnumWidget(cfg) {
   let values = enumCache[cfg.name];
   if (!values) {
     try {
-      const r = await fetch(`http://localhost:8080/api/fields/enum-values/${encodeURIComponent(cfg.name)}`);
+      const r = await fetch(`${API_BASE}/api/fields/enum-values/${encodeURIComponent(cfg.name)}`);
       values = r.ok ? await r.json() : (cfg.enum_values || []);
     } catch (e) {
       values = cfg.enum_values || [];
@@ -907,7 +1094,7 @@ function renderExistingFields(fieldsObj) {
 }
 
 function escHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 async function doSuggest() {
@@ -920,7 +1107,7 @@ async function doSuggest() {
   }
   
   try {
-    const r = await fetch('http://localhost:8080/api/suggestions', {
+    const r = await fetch(`${API_BASE}/api/suggestions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ field_name: currentSuggestionField, query: v, limit: 10 })
@@ -978,7 +1165,7 @@ function hideSuggestions() {
 }
 
 function recordCategory(fieldName, value) {
-  fetch('http://localhost:8080/api/field-categories', {
+  fetch(`${API_BASE}/api/field-categories`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ field_name: fieldName, category_value: value, source: 'manual' })
@@ -1013,7 +1200,7 @@ async function addField() {
   const datatype = (cfg && cfg.datatype) || 'string';
   
   try {
-    const r = await fetch(`http://localhost:8080/api/annotations/${selectedAnnotationId}/fields`, {
+    const r = await fetch(`${API_BASE}/api/annotations/${selectedAnnotationId}/fields`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1049,7 +1236,7 @@ async function toggleLock(lock) {
   
   try {
     const endpoint = lock ? 'lock' : 'unlock';
-    const r = await fetch(`http://localhost:8080/api/annotations/${selectedAnnotationId}/${endpoint}`, {
+    const r = await fetch(`${API_BASE}/api/annotations/${selectedAnnotationId}/${endpoint}`, {
       method: 'POST'
     });
     
@@ -1082,7 +1269,7 @@ async function deleteAnnotation() {
       return;
     }
     
-    const r = await fetch(`http://localhost:8080/api/annotations/${selectedAnnotationId}`, { method: 'DELETE' });
+    const r = await fetch(`${API_BASE}/api/annotations/${selectedAnnotationId}`, { method: 'DELETE' });
     if (r.ok) {
       selectedAnnotationId = null;
       loadAnnotationsFromServer();
@@ -1100,7 +1287,7 @@ async function clearAllAnnotations() {
   try {
     for (const ann of annotations) {
       if (!ann.localOnly) {
-        await fetch(`http://localhost:8080/api/annotations/${ann.id}`, { method: 'DELETE' });
+        await fetch(`${API_BASE}/api/annotations/${ann.id}`, { method: 'DELETE' });
       }
     }
     loadAnnotationsFromServer();
@@ -1113,7 +1300,7 @@ async function resetEntireDb() {
   if (!confirm('RESET ENTIRE DATABASE? This will delete ALL annotations, fields, and categories. Cannot be undone!')) return;
   
   try {
-    const r = await fetch('http://localhost:8080/api/reset-db', { method: 'POST' });
+    const r = await fetch(`${API_BASE}/api/reset-db`, { method: 'POST' });
     if (r.ok) {
       alert('Database reset. Reloading...');
       location.reload();
@@ -1123,11 +1310,6 @@ async function resetEntireDb() {
   } catch (e) {
     console.error('Error resetting DB:', e);
   }
-}
-
-function createNewAnnotation() {
-  setTool('rectangle');
-  alert('Click and drag on the image to create a rectangle annotation');
 }
 
 function renderAnnotationList() {
@@ -1321,7 +1503,7 @@ async function loadCropPreview(ann) {
   }
   
   try {
-    const r = await fetch(`http://localhost:8080/api/images/crop/${ann.id}`);
+    const r = await fetch(`${API_BASE}/api/images/crop/${ann.id}`);
     if (!r.ok) {
       cropPreview.style.display = 'none';
       return;
@@ -1354,7 +1536,7 @@ async function updateAnnotationOnServer(ann) {
   const geom = JSON.parse(ann.geometry_json);
   
   try {
-    const r = await fetch(`http://localhost:8080/api/annotations/${ann.id}`, {
+    const r = await fetch(`${API_BASE}/api/annotations/${ann.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1430,7 +1612,7 @@ function setExportStatus(msg) {
 async function saveS3Config() {
   setExportStatus('Saving S3 config...');
   try {
-    const r = await fetch('http://localhost:8080/api/s3/save-config', {
+    const r = await fetch(`${API_BASE}/api/s3/save-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: buildS3Config() })
@@ -1450,7 +1632,7 @@ async function saveS3Config() {
 async function testS3Connection() {
   setExportStatus('Testing S3 connection...');
   try {
-    const r = await fetch('http://localhost:8080/api/s3/test-connection', {
+    const r = await fetch(`${API_BASE}/api/s3/test-connection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: buildS3Config() })
@@ -1472,7 +1654,7 @@ async function runExport(pushS3) {
   
   try {
     if (pushS3) {
-      const saveRes = await fetch('http://localhost:8080/api/s3/save-config', {
+      const saveRes = await fetch(`${API_BASE}/api/s3/save-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config: buildS3Config() })
@@ -1486,7 +1668,7 @@ async function runExport(pushS3) {
       setExportStatus('Exporting & uploading to S3...');
     }
     
-    const r = await fetch('http://localhost:8080/api/export/full', {
+    const r = await fetch(`${API_BASE}/api/export/full`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: currentDatasetId, type: 'full', push_s3: pushS3, formats: ['parquet'] })
@@ -1507,7 +1689,7 @@ async function pollExportStatus(exportId) {
   for (let i = 0; i < tries; i++) {
     await new Promise(res => setTimeout(res, 2000));
     try {
-      const r = await fetch(`http://localhost:8080/api/export/status/${exportId}`);
+      const r = await fetch(`${API_BASE}/api/export/status/${exportId}`);
       if (!r.ok) continue;
       const st = await r.json();
       if (st.status === 'completed') {

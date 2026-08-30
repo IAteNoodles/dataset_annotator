@@ -1,34 +1,23 @@
-version: '3.8'
-
 services:
   annotator:
     build: .
     ports:
       - "8080:8080"
     volumes:
-      - ./config:/app/config
+      # Drop your dataset folders/images in ./dataset (mounted at /app/dataset).
+      - ./dataset:/app/dataset
+      # Persisted state: database, exports, snapshots, crops.
       - ./data:/app/data
-      - ./snapshots:/app/snapshots
       - ./exports:/app/exports
-      - ./plugins:/app/plugins
+      - ./snapshots:/app/snapshots
+      - ./crops:/app/crops
     environment:
-      - DATASET_ANNOTATOR_CONFIG=/app/config/dataset_config.yaml
-      - DATASET_ANNOTATOR_DB=/app/data/annotator.db
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      # Folder auto-opened and scanned on startup. Change at runtime in the UI.
+      DATASET_ANNOTATOR_DATASET_PATH: /app/dataset
+      DATASET_ANNOTATOR_CONFIG: /app/config/dataset_config.yaml
+      DATASET_ANNOTATOR_DB: /app/data/annotator.db
+      # Optional S3 creds (export to AWS S3 from the Operations panel)
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     restart: unless-stopped
-
-  # Optional: LocalStack for local S3 testing
-  # localstack:
-  #   image: localstack/localstack:latest
-  #   ports:
-  #     - "4566:4566"
-  #   environment:
-  #     - SERVICES=s3
-  #     - DEBUG=1
-  #   volumes:
-  #     - localstack-data:/var/lib/localstack
-
-# volumes:
-#   localstack-data:

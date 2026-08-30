@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import os
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 
 from backend.deps import get_config, get_db
 from backend.models import (
-    DatasetResponse, DataItemResponse, DataItemListResponse,
+    DatasetResponse, DatasetOpenRequest, DataItemResponse, DataItemListResponse,
     ConfigValidationRequest, ConfigValidationResponse,
     DatasetListResponse,
 )
@@ -38,7 +39,111 @@ async def init_dataset() -> DatasetResponse:
 async def list_datasets() -> DatasetListResponse:
     db = get_db()
     datasets = await db.fetchall("SELECT * FROM datasets ORDER BY created_at DESC")
-    return DatasetListResponse(datasets=[DatasetResponse(**d) for d in datasets], total=len(datasets))
+    out: list[DatasetResponse] = []
+    for d in datasets:
+        row = DatasetResponse(**d)
+        try:
+            cfg_json = json.loads(d["config_json"])
+            p = cfg_json.get("dataset", {}).get("path")
+            if p:
+                row.path = str(Path(p))
+        except Exception:
+            row.path = None
+        out.append(row)
+    return DatasetListResponse(datasets=out, total=len(out))
+
+
+@router.post("/datasets/open")
+async def open_dataset(request: DatasetOpenRequest) -> dict[str, Any]:
+    """Set the active dataset folder, (re)create its dataset row, and scan it."""
+    db = get_db()
+    config = get_config()
+    from backend.config import save_config
+    from backend.services.scanner import scan_dataset
+
+    root = Path(str(request.path)).expanduser().resolve()
+    if not root.is_dir():
+        raise HTTPException(400, f"Path is not a directory: {root}")
+
+    config.dataset.name = root.name
+    config.dataset.path = str(root)
+
+    config_path = Path(os.getenv("DATASET_ANNOTATOR_CONFIG", "config/dataset_config.yaml"))
+    try:
+        save_config(config, config_path)
+    except Exception:
+        pass  # non-fatal: in-memory config is already updated
+
+    result = await scan_dataset(db, config)
+    return {
+        "dataset_id": result["dataset_id"],
+        "name": config.dataset.name,
+        "path": str(root),
+        "scanned": result["scanned"],
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+    }
+
+
+@router.get("/datasets/{dataset_id}/tree")
+async def get_dataset_tree(dataset_id: int) -> dict[str, Any]:
+    """Return a nested folder/file tree plus a flat, ordered item list."""
+    db = get_db()
+    items = await db.fetchall(
+        "SELECT * FROM data_items WHERE dataset_id = ? ORDER BY sort_order",
+        (dataset_id,)
+    )
+    return {
+        "dataset_id": dataset_id,
+        "total": len(items),
+        "nodes": build_tree(items),
+        "items": [DataItemResponse(**item) for item in items],
+    }
+
+
+def build_tree(items: list[dict]) -> list[dict]:
+    """Build a nested {name,type,children|item_id,status} tree from rel_paths."""
+    root: dict = {"children": []}
+
+    def dir_key(node: dict) -> str:
+        return str(id(node))
+
+    index: dict[str, dict] = {dir_key(root): root}
+
+    for it in items:
+        rel = str(it["rel_path"]).replace("\\", "/")
+        parts = [p for p in rel.split("/") if p]
+        if not parts:
+            continue
+
+        cur = index[dir_key(root)]
+        for part in parts[:-1]:
+            nxt = next(
+                (c for c in cur["children"] if c.get("type") == "dir" and c.get("name") == part),
+                None,
+            )
+            if nxt is None:
+                nxt = {"name": part, "type": "dir", "children": []}
+                cur["children"].append(nxt)
+                index[dir_key(nxt)] = nxt
+            cur = nxt
+
+        cur["children"].append({
+            "name": parts[-1],
+            "type": "file",
+            "item_id": it["id"],
+            "rel_path": str(it["rel_path"]),
+            "status": it["status"],
+        })
+
+    def sort_nodes(nodes: list[dict]) -> None:
+        nodes.sort(key=lambda n: (0 if n.get("type") == "dir" else 1, str(n.get("name", "")).lower()))
+        for n in nodes:
+            if n.get("children"):
+                sort_nodes(n["children"])
+
+    sort_nodes(root["children"])
+    return root["children"]
 
 
 @router.post("/datasets/scan")

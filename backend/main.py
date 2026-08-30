@@ -31,6 +31,20 @@ async def lifespan(app: FastAPI):
     set_config(cfg)
     set_db(database)
 
+    # Optional: auto-open + scan a dataset folder at startup (used by Docker).
+    env_dataset_path = os.getenv("DATASET_ANNOTATOR_DATASET_PATH")
+    if env_dataset_path:
+        from backend.config import save_config
+        try:
+            p = Path(env_dataset_path).expanduser().resolve()
+            if p.is_dir():
+                cfg.dataset.path = str(p)
+                cfg.dataset.name = p.name
+                save_config(cfg, CONFIG_PATH)
+                await scan_dataset(database, cfg)
+        except Exception as e:
+            print(f"Auto-open dataset failed: {e}")
+
     if cfg.s3 and cfg.s3.enabled and cfg.s3.fetch_on_startup:
         asyncio.create_task(sync_from_s3_on_startup())
 

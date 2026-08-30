@@ -29,6 +29,133 @@ body {
   flex-direction: column;
   gap: 1rem;
   min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.folder-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.folder-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  background: #0f172a;
+  color: white;
+}
+
+.folder-row .btn-primary {
+  width: auto;
+  white-space: nowrap;
+}
+
+.tree-status {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.folder-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -0.5rem;
+  padding: 0 0.5rem;
+}
+
+.folder-tree .tree-empty {
+  font-size: 0.75rem;
+  color: #64748b;
+  padding: 0.5rem;
+}
+
+.folder-tree ul.tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.folder-tree ul.tree-list ul.tree-list {
+  padding-left: 0.9rem;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #cbd5e1;
+}
+
+.tree-node:hover {
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.tree-node .tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-node .tree-caret {
+  flex: none;
+  width: 0.9rem;
+  color: #94a3b8;
+  text-align: center;
+  font-size: 0.7rem;
+}
+
+.tree-node.file .tree-status {
+  flex: none;
+  width: 0.9rem;
+  text-align: center;
+  color: #22c55e;
+}
+
+.tree-node.file.done .tree-name {
+  color: #64748b;
+  text-decoration: line-through;
+}
+
+.tree-node.file.active {
+  background: var(--primary);
+  color: white;
+}
+
+.tree-node.file.active .tree-name {
+  color: white;
+}
+
+.ops-toggle {
+  flex: none;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.item-counter {
+  font-size: 0.75rem;
+  color: #64748b;
+  align-self: center;
+}
+
+.s3-label {
+  display: block;
+  font-size: 0.7rem;
+  color: #94a3b8;
+  margin-bottom: 0.2rem;
 }
 
 .sidebar h2 {
