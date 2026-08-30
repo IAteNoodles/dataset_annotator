@@ -181,7 +181,10 @@ async def reset_db():
     await db.execute('DELETE FROM snapshots')
     await db.execute('DELETE FROM exports')
     await db.execute('DELETE FROM export_cursors')
-    
+
+    # Clear done/progress marks so the tree shows everything as pending again.
+    await db.execute("UPDATE data_items SET status = 'pending', updated_at = CURRENT_TIMESTAMP")
+
     return {"status": "reset", "message": "Database cleared"}
 
 

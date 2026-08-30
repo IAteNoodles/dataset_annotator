@@ -43,8 +43,10 @@ const FALLBACK_FIELDS = [
 ];
 let fieldConfigs = FALLBACK_FIELDS;  // from /api/fields/config (user-facing fields)
 let enumCache = {};             // field name -> enum values from /api/fields/enum-values
-let currentEnumFieldConfig = null;
-let currentSuggestionField = null;
+let currentFieldConfig = null;  // FieldConfig for the currently selected field name
+let currentSuggestionField = null;   // field name to mine backend suggestions from
+let currentSuggestionBase = [];      // local base options (e.g. enum values) to merge in
+let fieldNameTimer = null;
 let suggestionTimer = null;
 
 // User-created ("Other") field names, persisted so they stay available for
@@ -363,8 +365,9 @@ async function loadAnnotationsFromServer() {
     const r = await fetch(`${API_BASE}/api/data-items/${currentDataItemId}/annotations`);
     if (r.ok) {
       const serverAnns = await r.json();
-      annotations = serverAnns.map(ann => ({
-        ...ann,
+      annotations = serverAnns.map(x => ({
+        ...x.annotation,
+        fields: x.fields || {},
         localOnly: false,
         dirty: false
       }));
@@ -423,14 +426,17 @@ function setupEventListeners() {
   document.getElementById('unlockBtn').addEventListener('click', () => toggleLock(false));
   document.getElementById('deleteBtn').addEventListener('click', deleteAnnotation);
 
-  // Field controls
+  // Field controls (combobox: a single input that autocompletes + accepts typing)
   document.getElementById('addFieldBtn').addEventListener('click', addField);
-
-  // Field name select / custom name
-  document.getElementById('fieldNameSelect').addEventListener('change', onFieldNameChange);
-  document.getElementById('customFieldName').addEventListener('input', updateAddFieldState);
+  document.getElementById('fieldNameInput').addEventListener('input', onFieldNameType);
+  document.getElementById('fieldNameInput').addEventListener('change', onFieldNameCommit);
+  document.getElementById('fieldNameInput').addEventListener('blur', onFieldNameCommit);
 
   // Field value + suggestion behavior
+  document.getElementById('fieldValue').addEventListener('focus', () => {
+    clearTimeout(suggestionTimer);
+    suggestionTimer = setTimeout(doSuggest, 120);
+  });
   document.getElementById('fieldValue').addEventListener('input', () => {
     clearTimeout(suggestionTimer);
     suggestionTimer = setTimeout(doSuggest, 250);
@@ -440,7 +446,6 @@ function setupEventListeners() {
   document.getElementById('fieldValue').addEventListener('blur', () => {
     setTimeout(() => hideSuggestions(), 150);
   });
-  document.getElementById('customTypeInput').addEventListener('input', updateAddFieldState);
 
   // Operations: export + S3
   document.getElementById('exportBtn').addEventListener('click', () => runExport(false));
@@ -978,44 +983,87 @@ async function loadAnnotationFields(annId) {
 }
 
 function renderFieldPanel(fields) {
-  const selectEl = document.getElementById('fieldNameSelect');
+  const nameInput = document.getElementById('fieldNameInput');
   const fieldsObj = (fields && typeof fields === 'object') ? fields : {};
-  
-  // User-facing fields from config (/api/fields/config)
-  const fieldNames = fieldConfigs.map(f => f.name);
 
-  // User-created fields from previous sessions stay available.
-  customFieldRegistry.forEach(name => {
-    if (!fieldNames.includes(name)) fieldNames.push(name);
-  });
+  // Combobox options = config fields + user-created fields + fields seen on this annotation.
+  const knownNames = new Set(fieldConfigs.map(f => f.name));
+  customFieldRegistry.forEach(n => knownNames.add(n));
+  Object.keys(fieldsObj).forEach(n => knownNames.add(n));
 
-  // Add existing custom fields not in config
-  Object.keys(fieldsObj).forEach(name => {
-    if (!fieldNames.includes(name)) fieldNames.push(name);
-  });
-  
-  selectEl.innerHTML = '<option value="">Select field...</option>';
-  fieldNames.forEach(name => {
+  const datalist = document.getElementById('fieldNameList');
+  datalist.innerHTML = '';
+  [...knownNames].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).forEach(name => {
     const opt = document.createElement('option');
     opt.value = name;
-    opt.textContent = name;
-    selectEl.appendChild(opt);
+    datalist.appendChild(opt);
   });
-  
-  // "Other" = create a brand-new field (reveals Field Name + Field Value inputs)
-  const otherOpt = document.createElement('option');
-  otherOpt.value = '__other__';
-  otherOpt.textContent = 'Other (new field)...';
-  selectEl.appendChild(otherOpt);
-  
-  selectEl.disabled = false;
-  document.getElementById('customFieldRow').style.display = 'none';
-  document.getElementById('customFieldName').disabled = true;
-  
+
+  nameInput.value = '';
+  nameInput.disabled = false;
+
   resetFieldInputs();
   currentSuggestionField = null;
   renderExistingFields(fieldsObj);
   updateAddFieldState();
+}
+
+function onFieldNameType() {
+  clearTimeout(fieldNameTimer);
+  fieldNameTimer = setTimeout(() => {
+    const name = document.getElementById('fieldNameInput').value.trim();
+    if (!name) { resetFieldInputs(); return; }
+    setupValueWidgetForField(name);
+  }, 300);
+}
+
+function onFieldNameCommit() {
+  const name = document.getElementById('fieldNameInput').value.trim();
+  if (name) setupValueWidgetForField(name);
+}
+
+let lastSetupField = null;
+
+async function setupValueWidgetForField(fieldName) {
+  const valueInput = document.getElementById('fieldValue');
+  const preserve = fieldName === lastSetupField &&
+    (valueInput.value.trim() !== '' || document.activeElement && document.activeElement.id === 'fieldValue');
+  const preservedValue = preserve ? valueInput.value : '';
+
+  resetFieldInputs();
+  document.getElementById('fieldNameInput').value = fieldName;
+
+  const cfg = fieldConfigs.find(f => f.name === fieldName);
+  currentFieldConfig = cfg || null;
+
+  if (cfg && cfg.datatype === 'enum') {
+    await loadEnumOptions(cfg);
+  } else {
+    currentSuggestionBase = [];
+    if ((cfg && cfg.provide_suggestions) || (!cfg && customFieldRegistry.includes(fieldName))) {
+      currentSuggestionField = fieldName;
+    }
+  }
+  lastSetupField = fieldName;
+  if (preserve) valueInput.value = preservedValue;
+  updateAddFieldState();
+}
+
+async function loadEnumOptions(cfg) {
+  // Base options come from the enum config (+ recorded categories on the server).
+  let values = enumCache[cfg.name];
+  if (!values) {
+    try {
+      const r = await fetch(`${API_BASE}/api/fields/enum-values/${encodeURIComponent(cfg.name)}`);
+      values = r.ok ? await r.json() : (cfg.enum_values || []);
+    } catch (e) {
+      values = cfg.enum_values || [];
+    }
+    enumCache[cfg.name] = values;
+  }
+  currentSuggestionBase = Array.isArray(values) ? values : [];
+  // Keep backend suggestions on too (recorded values / annotation mining).
+  currentSuggestionField = cfg.name;
 }
 
 function loadFieldConfigs() {
@@ -1030,128 +1078,28 @@ function loadFieldConfigs() {
 }
 
 function onFieldNameChange() {
-  const sel = document.getElementById('fieldNameSelect').value;
-  const customRow = document.getElementById('customFieldRow');
-  const customName = document.getElementById('customFieldName');
-  
-  if (sel === '__other__') {
-    customRow.style.display = 'block';
-    customName.disabled = false;
-    resetFieldInputs();
-    customName.focus();
-    updateAddFieldState();
-    return;
-  }
-  
-  customRow.style.display = 'none';
-  customName.disabled = true;
-  setupValueWidgetForField(sel);
-}
-
-async function setupValueWidgetForField(fieldName) {
-  resetFieldInputs();
-  currentSuggestionField = null;
-  
-  const cfg = fieldConfigs.find(f => f.name === fieldName);
-  if (cfg && cfg.datatype === 'enum') {
-    await setupEnumWidget(cfg);
-    return;
-  }
-  
-  const input = document.getElementById('fieldValue');
-  input.type = (cfg && cfg.datatype === 'number') ? 'number' : 'text';
-  input.placeholder = (cfg && cfg.placeholder) ? cfg.placeholder : 'Field value';
-  input.disabled = false;
-  
-  // Custom (user-created) fields are free text and get suggestions too.
-  if ((cfg && cfg.provide_suggestions) || (!cfg && customFieldRegistry.includes(fieldName))) {
-    currentSuggestionField = fieldName;
-  }
-  updateAddFieldState();
-}
-
-async function setupEnumWidget(cfg) {
-  currentEnumFieldConfig = cfg;
-  
-  let values = enumCache[cfg.name];
-  if (!values) {
-    try {
-      const r = await fetch(`${API_BASE}/api/fields/enum-values/${encodeURIComponent(cfg.name)}`);
-      values = r.ok ? await r.json() : (cfg.enum_values || []);
-    } catch (e) {
-      values = cfg.enum_values || [];
-    }
-    enumCache[cfg.name] = values;
-  }
-  
-  const wrap = document.getElementById('valueWrap');
-  const input = document.getElementById('fieldValue');
-  const select = document.createElement('select');
-  select.id = 'fieldValueSelect';
-  select.dataset.fieldName = cfg.name;
-  
-  values.forEach(v => {
-    const o = document.createElement('option');
-    o.value = v;
-    o.textContent = v;
-    select.appendChild(o);
-  });
-  
-  input.style.display = 'none';
-  select.disabled = false;
-  wrap.insertBefore(select, document.getElementById('customTypeInput'));
-  select.addEventListener('change', () => onEnumValueChange(select));
-  onEnumValueChange(select);
-}
-
-function onEnumValueChange(select) {
-  const custom = document.getElementById('customTypeInput');
-  const cfg = currentEnumFieldConfig;
-  
-  if (cfg && cfg.allow_custom && (select.value === cfg.custom_label || select.value === '__other__')) {
-    custom.style.display = 'block';
-    custom.disabled = false;
-    custom.placeholder = cfg.custom_label ? 'Type new value...' : 'Type new value...';
-  } else {
-    custom.style.display = 'none';
-    custom.disabled = true;
-  }
-  updateAddFieldState();
+  const name = document.getElementById('fieldNameInput').value.trim();
+  if (!name) { resetFieldInputs(); return; }
+  setupValueWidgetForField(name);
 }
 
 function resetFieldInputs() {
   const input = document.getElementById('fieldValue');
-  const customType = document.getElementById('customTypeInput');
-  const dynamicSelect = document.getElementById('fieldValueSelect');
   
-  if (dynamicSelect) {
-    if (dynamicSelect.dataset.fieldName) delete enumCache[dynamicSelect.dataset.fieldName];
-    dynamicSelect.remove();
-  }
   input.style.display = '';
   input.type = 'text';
   input.value = '';
   input.placeholder = 'Field value';
   input.disabled = false;
   
-  customType.value = '';
-  customType.style.display = 'none';
-  customType.disabled = true;
+  currentFieldConfig = null;
+  currentSuggestionBase = [];
   
   hideSuggestions();
   updateAddFieldState();
 }
 
 function getCurrentValue() {
-  const sel = document.getElementById('fieldValueSelect');
-  const customType = document.getElementById('customTypeInput');
-  
-  if (sel && !sel.style.display && sel.style.display !== 'none') {
-    if (customType.style.display !== 'none') {
-      return customType.value.trim() || sel.value;
-    }
-    return sel.value;
-  }
   return document.getElementById('fieldValue').value.trim();
 }
 
@@ -1162,10 +1110,7 @@ function updateAddFieldState() {
     return;
   }
   
-  const sel = document.getElementById('fieldNameSelect').value;
-  const customName = document.getElementById('customFieldName').value.trim();
-  const fieldName = sel === '__other__' ? customName : sel;
-  
+  const fieldName = document.getElementById('fieldNameInput').value.trim();
   const value = getCurrentValue();
   addBtn.disabled = !(fieldName && value);
 }
@@ -1193,37 +1138,62 @@ function escHtml(s) {
 async function doSuggest() {
   const input = document.getElementById('fieldValue');
   const list = document.getElementById('suggestionList');
-  const v = input.value.toLowerCase();
-  if (!currentSuggestionField || v.length < 2) {
+  const raw = input.value;
+  const v = raw.toLowerCase();
+  const minChars = 2;
+
+  const hasBase = currentSuggestionBase && currentSuggestionBase.length > 0;
+  const canBackend = !!currentSuggestionField && raw.length >= minChars;
+  if (!hasBase && !canBackend) {
     hideSuggestions();
     return;
   }
-  
-  try {
-    const r = await fetch(`${API_BASE}/api/suggestions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ field_name: currentSuggestionField, query: v, limit: 10 })
-    });
-    if (!r.ok) { hideSuggestions(); return; }
-    const data = await r.json();
-    const matches = (data.suggestions || []).filter(s => s.toLowerCase().includes(v)).slice(0, 10);
-    if (!matches.length) { hideSuggestions(); return; }
-    
-    list.innerHTML = matches.map(m => `<div class="ac-item">${escHtml(m)}</div>`).join('');
-    list.style.display = 'block';
-    list.style.width = input.offsetWidth + 'px';
-    list.querySelectorAll('.ac-item').forEach((item, mi) => {
-      item.addEventListener('mousedown', e => {
-        e.preventDefault();
-        input.value = matches[mi];
-        updateAddFieldState();
-        hideSuggestions();
+
+  const matches = [];
+  const seen = new Set();
+  (currentSuggestionBase || []).forEach(opt => {
+    const s = String(opt);
+    if (v && !s.toLowerCase().includes(v)) return;
+    const key = s.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); matches.push(s); }
+  });
+
+  if (canBackend) {
+    try {
+      const r = await fetch(`${API_BASE}/api/suggestions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field_name: currentSuggestionField, query: raw, limit: 10 })
       });
-    });
-  } catch (e) {
-    hideSuggestions();
+      if (r.ok) {
+        const data = await r.json();
+        (data.suggestions || []).forEach(s => {
+          if (v && !s.toLowerCase().includes(v)) return;
+          const key = s.toLowerCase();
+          if (!seen.has(key)) { seen.add(key); matches.push(s); }
+        });
+      }
+    } catch (e) {
+      // transient - fall through with base matches
+    }
   }
+
+  if (!matches.length) {
+    hideSuggestions();
+    return;
+  }
+
+  list.innerHTML = matches.slice(0, 10).map((m, i) => `<div class="ac-item" data-i="${i}">${escHtml(m)}</div>`).join('');
+  list.style.display = 'block';
+  list.style.width = input.offsetWidth + 'px';
+  list.querySelectorAll('.ac-item').forEach(item => {
+    item.addEventListener('mousedown', e => {
+      e.preventDefault();
+      input.value = matches[Number(item.dataset.i)];
+      updateAddFieldState();
+      hideSuggestions();
+    });
+  });
 }
 
 function onValueKeydown(e) {
@@ -1266,9 +1236,7 @@ function recordCategory(fieldName, value) {
 }
 
 async function addField() {
-  const sel = document.getElementById('fieldNameSelect');
-  const customName = document.getElementById('customFieldName');
-  const fieldName = sel.value === '__other__' ? customName.value.trim() : sel.value;
+  const fieldName = document.getElementById('fieldNameInput').value.trim();
   
   if (!fieldName || !selectedAnnotationId) { updateAddFieldState(); return; }
   

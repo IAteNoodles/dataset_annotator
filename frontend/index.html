@@ -294,17 +294,11 @@
       
       <div class="field-group" id="fieldGroup" style="display:none;">
         <label style="font-size:0.75rem;color:#64748b;">Field Name</label>
-        <select id="fieldNameSelect" disabled>
-          <option value="">Select field...</option>
-        </select>
-        <div class="custom-field-row" id="customFieldRow" style="display:none;">
-          <label style="font-size:0.75rem;color:#64748b;">New Field Name</label>
-          <input type="text" id="customFieldName" placeholder="Type new field name..." disabled autocomplete="off">
-        </div>
+        <input type="text" id="fieldNameInput" list="fieldNameList" placeholder="Select or type field name..." disabled autocomplete="off">
+        <datalist id="fieldNameList"></datalist>
         <label style="font-size:0.75rem;color:#64748b;">Field Value</label>
         <div id="valueWrap" class="value-wrap">
           <input type="text" id="fieldValue" placeholder="Field value" disabled autocomplete="off">
-          <input type="text" id="customTypeInput" placeholder="Type new value..." disabled autocomplete="off" style="display:none;">
           <div id="suggestionList" class="ac-list"></div>
         </div>
         <button id="addFieldBtn" class="btn-primary" disabled style="margin-top:0.5rem;">Add Field</button>
