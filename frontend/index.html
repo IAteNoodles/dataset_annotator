@@ -255,6 +255,28 @@
       <button id="clearAllBtn" class="btn-primary" style="margin-bottom:0.5rem;background:#dc2626;">Clear All Annotations</button>
       <button id="resetDbBtn" class="btn-primary" style="background:#dc2626;">Reset Entire DB</button>
       <button id="newAnnotationBtn" class="btn-primary" disabled>New Annotation</button>
+
+      <hr style="margin:1rem 0;border-color:#334155;">
+      <h3 style="margin:0 0 0.5rem 0;font-size:0.875rem;opacity:0.7;">Operations</h3>
+      <button id="exportBtn" class="btn-primary" style="margin-bottom:0.5rem;">Export Parquet</button>
+      <button id="exportS3Btn" class="btn-primary" style="margin-bottom:0.5rem;">Export → S3</button>
+      <div style="margin-top:0.5rem;">
+        <label style="font-size:0.75rem;color:#94a3b8;">AWS Region</label>
+        <input type="text" id="s3Region" class="s3-input" placeholder="us-east-1" autocomplete="off">
+        <label style="font-size:0.75rem;color:#94a3b8;">Access Key</label>
+        <input type="text" id="s3AccessKey" class="s3-input" placeholder="AKIA..." autocomplete="off">
+        <label style="font-size:0.75rem;color:#94a3b8;">Secret Key</label>
+        <input type="password" id="s3SecretKey" class="s3-input" placeholder="..." autocomplete="off">
+        <label style="font-size:0.75rem;color:#94a3b8;">Bucket</label>
+        <input type="text" id="s3Bucket" class="s3-input" placeholder="my-dataset-bucket" autocomplete="off">
+        <label style="font-size:0.75rem;color:#94a3b8;">Endpoint URL (optional)</label>
+        <input type="text" id="s3Endpoint" class="s3-input" placeholder="https://..." autocomplete="off">
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+          <button id="s3SaveBtn" class="button-small secondary">Save Config</button>
+          <button id="s3TestBtn" class="button-small secondary">Test</button>
+        </div>
+        <div id="exportStatus" class="export-status" style="margin-top:0.5rem;"></div>
+      </div>
     </div>
 
     <div class="main">
@@ -283,9 +305,18 @@
         <select id="fieldNameSelect" disabled>
           <option value="">Select field...</option>
         </select>
+        <div class="custom-field-row" id="customFieldRow" style="display:none;">
+          <label style="font-size:0.75rem;color:#64748b;">New Field Name</label>
+          <input type="text" id="customFieldName" placeholder="Type new field name..." disabled autocomplete="off">
+        </div>
         <label style="font-size:0.75rem;color:#64748b;">Field Value</label>
-        <input type="text" id="fieldValue" placeholder="Field value" disabled>
+        <div id="valueWrap" class="value-wrap">
+          <input type="text" id="fieldValue" placeholder="Field value" disabled autocomplete="off">
+          <input type="text" id="customTypeInput" placeholder="Type new value..." disabled autocomplete="off" style="display:none;">
+          <div id="suggestionList" class="ac-list"></div>
+        </div>
         <button id="addFieldBtn" class="btn-primary" disabled style="margin-top:0.5rem;">Add Field</button>
+        <div id="existingFields" class="existing-fields"></div>
       </div>
       
       <div id="annotationControls" style="display:none;">

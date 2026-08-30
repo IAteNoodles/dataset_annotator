@@ -157,3 +157,82 @@ body {
   display: flex;
   gap: 0.5rem;
 }
+
+.s3-input {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  background: #0f172a;
+  color: white;
+  margin-bottom: 0.4rem;
+  box-sizing: border-box;
+}
+
+.export-status {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.value-wrap {
+  position: relative;
+}
+
+.ac-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  display: none;
+  background: white;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.ac-item {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+  color: #1e293b;
+  cursor: pointer;
+}
+
+.ac-item:hover,
+.ac-item.active {
+  background: #3b82f6;
+  color: white;
+}
+
+.existing-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.field-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+}
+
+.field-chip .chip-name {
+  font-weight: 600;
+  color: #3b82f6;
+  white-space: nowrap;
+}
+
+.field-chip .chip-val {
+  color: #1e293b;
+  word-break: break-word;
+}

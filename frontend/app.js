@@ -23,6 +23,22 @@ let interactionHandle = null;
 let interactionStart = { x: 0, y: 0 };
 let originalAnnotation = null;
 
+// Field/taxonomy state
+const FALLBACK_FIELDS = [
+  { name: 'Text', datatype: 'string', allow_custom: false, provide_suggestions: true },
+  { name: 'Type', datatype: 'enum', enum_values: ['Medicine', 'Advice', 'Frequency', 'Other'], allow_custom: true, custom_label: 'Other (specify)' },
+  { name: 'Dosage', datatype: 'string', allow_custom: false, provide_suggestions: true },
+  { name: 'Frequency', datatype: 'enum', enum_values: ['Once daily', 'Twice daily', 'Three times daily', 'Four times daily', 'As needed', 'Weekly', 'Monthly', 'Other'], allow_custom: true, custom_label: 'Other (specify)' },
+  { name: 'Route', datatype: 'enum', enum_values: ['Oral', 'Topical', 'Injection', 'Inhalation', 'Sublingual', 'Rectal', 'Other'], allow_custom: true, custom_label: 'Other (specify)' },
+  { name: 'Confidence', datatype: 'number', allow_custom: false, provide_suggestions: false },
+  { name: 'Notes', datatype: 'string', allow_custom: false, provide_suggestions: false }
+];
+let fieldConfigs = FALLBACK_FIELDS;  // from /api/fields/config (user-facing fields)
+let enumCache = {};             // field name -> enum values from /api/fields/enum-values
+let currentEnumFieldConfig = null;
+let currentSuggestionField = null;
+let suggestionTimer = null;
+
 // Initialize
 document.addEventListener('DOMContentLoaded', init);
 
@@ -30,6 +46,8 @@ async function init() {
   canvas = document.getElementById('canvas');
   ctx = canvas.getContext('2d');
   
+  loadFieldConfigs();
+  loadS3ConfigFromStorage();
   await loadDatasets();
   setupCanvas();
   setupEventListeners();
@@ -169,10 +187,27 @@ function setupEventListeners() {
   // Field controls
   document.getElementById('addFieldBtn').addEventListener('click', addField);
 
-  // Field name change
-  document.getElementById('fieldNameSelect').addEventListener('change', (e) => {
-    document.getElementById('fieldValue').placeholder = `Value for ${e.target.value}`;
+  // Field name select / custom name
+  document.getElementById('fieldNameSelect').addEventListener('change', onFieldNameChange);
+  document.getElementById('customFieldName').addEventListener('input', updateAddFieldState);
+
+  // Field value + suggestion behavior
+  document.getElementById('fieldValue').addEventListener('input', () => {
+    clearTimeout(suggestionTimer);
+    suggestionTimer = setTimeout(doSuggest, 250);
+    updateAddFieldState();
   });
+  document.getElementById('fieldValue').addEventListener('keydown', onValueKeydown);
+  document.getElementById('fieldValue').addEventListener('blur', () => {
+    setTimeout(() => hideSuggestions(), 150);
+  });
+  document.getElementById('customTypeInput').addEventListener('input', updateAddFieldState);
+
+  // Operations: export + S3
+  document.getElementById('exportBtn').addEventListener('click', () => runExport(false));
+  document.getElementById('exportS3Btn').addEventListener('click', () => runExport(true));
+  document.getElementById('s3SaveBtn').addEventListener('click', saveS3Config);
+  document.getElementById('s3TestBtn').addEventListener('click', testS3Connection);
 }
 
 function setTool(tool) {
@@ -670,60 +705,312 @@ async function loadAnnotationFields(annId) {
 
 function renderFieldPanel(fields) {
   const selectEl = document.getElementById('fieldNameSelect');
-  const valueInput = document.getElementById('fieldValue');
-  const addBtn = document.getElementById('addFieldBtn');
+  const fieldsObj = (fields && typeof fields === 'object') ? fields : {};
+  
+  // User-facing fields from config (/api/fields/config)
+  const fieldNames = fieldConfigs.map(f => f.name);
+  
+  // Add existing custom fields not in config
+  Object.keys(fieldsObj).forEach(name => {
+    if (!fieldNames.includes(name)) fieldNames.push(name);
+  });
   
   selectEl.innerHTML = '<option value="">Select field...</option>';
-  
-  // Predefined field names from config (dataset_config.yaml)
-  const predefinedFields = [
-    'Text', 'Type', 'Dosage', 'Frequency', 'Route', 'Confidence', 'Notes'
-  ];
-  
-  // Always include all predefined fields in the dropdown
-  predefinedFields.forEach(fieldName => {
+  fieldNames.forEach(name => {
     const opt = document.createElement('option');
-    opt.value = fieldName;
-    opt.textContent = fieldName;
+    opt.value = name;
+    opt.textContent = name;
     selectEl.appendChild(opt);
   });
   
-  // Add existing field values if present
-  if (fields && Object.keys(fields).length > 0) {
-    Object.keys(fields).forEach(fieldName => {
-      // Skip if already added from predefined
-      if (!Array.from(selectEl.options).some(o => o.value === fieldName)) {
-        const opt = document.createElement('option');
-        opt.value = fieldName;
-        opt.textContent = fieldName;
-        selectEl.appendChild(opt);
-      }
-    });
-  }
+  // "Other" = create a brand-new field (reveals Field Name + Field Value inputs)
+  const otherOpt = document.createElement('option');
+  otherOpt.value = '__other__';
+  otherOpt.textContent = 'Other (new field)...';
+  selectEl.appendChild(otherOpt);
   
   selectEl.disabled = false;
-  valueInput.disabled = false;
-  addBtn.disabled = false;
+  document.getElementById('customFieldRow').style.display = 'none';
+  document.getElementById('customFieldName').disabled = true;
+  
+  resetFieldInputs();
+  currentSuggestionField = null;
+  renderExistingFields(fieldsObj);
+  updateAddFieldState();
+}
+
+function loadFieldConfigs() {
+  fetch('http://localhost:8080/api/fields/config')
+    .then(r => r.json())
+    .then(configs => {
+      // Keep only user-facing fields (skip internal / hidden / json fields)
+      const visible = configs.filter(f => !(f.hidden === true) && f.datatype !== 'json' && !(f.source && f.internal));
+      fieldConfigs = visible.length ? visible : FALLBACK_FIELDS;
+    })
+    .catch(() => { fieldConfigs = FALLBACK_FIELDS; });
+}
+
+function onFieldNameChange() {
+  const sel = document.getElementById('fieldNameSelect').value;
+  const customRow = document.getElementById('customFieldRow');
+  const customName = document.getElementById('customFieldName');
+  
+  if (sel === '__other__') {
+    customRow.style.display = 'block';
+    customName.disabled = false;
+    resetFieldInputs();
+    customName.focus();
+    updateAddFieldState();
+    return;
+  }
+  
+  customRow.style.display = 'none';
+  customName.disabled = true;
+  setupValueWidgetForField(sel);
+}
+
+async function setupValueWidgetForField(fieldName) {
+  resetFieldInputs();
+  currentSuggestionField = null;
+  
+  const cfg = fieldConfigs.find(f => f.name === fieldName);
+  if (cfg && cfg.datatype === 'enum') {
+    await setupEnumWidget(cfg);
+    return;
+  }
+  
+  const input = document.getElementById('fieldValue');
+  input.type = (cfg && cfg.datatype === 'number') ? 'number' : 'text';
+  input.placeholder = (cfg && cfg.placeholder) ? cfg.placeholder : 'Field value';
+  input.disabled = false;
+  
+  if (cfg && cfg.provide_suggestions) {
+    currentSuggestionField = fieldName;
+  }
+  updateAddFieldState();
+}
+
+async function setupEnumWidget(cfg) {
+  currentEnumFieldConfig = cfg;
+  
+  let values = enumCache[cfg.name];
+  if (!values) {
+    try {
+      const r = await fetch(`http://localhost:8080/api/fields/enum-values/${encodeURIComponent(cfg.name)}`);
+      values = r.ok ? await r.json() : (cfg.enum_values || []);
+    } catch (e) {
+      values = cfg.enum_values || [];
+    }
+    enumCache[cfg.name] = values;
+  }
+  
+  const wrap = document.getElementById('valueWrap');
+  const input = document.getElementById('fieldValue');
+  const select = document.createElement('select');
+  select.id = 'fieldValueSelect';
+  select.dataset.fieldName = cfg.name;
+  
+  values.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    select.appendChild(o);
+  });
+  
+  input.style.display = 'none';
+  select.disabled = false;
+  wrap.insertBefore(select, document.getElementById('customTypeInput'));
+  select.addEventListener('change', () => onEnumValueChange(select));
+  onEnumValueChange(select);
+}
+
+function onEnumValueChange(select) {
+  const custom = document.getElementById('customTypeInput');
+  const cfg = currentEnumFieldConfig;
+  
+  if (cfg && cfg.allow_custom && (select.value === cfg.custom_label || select.value === '__other__')) {
+    custom.style.display = 'block';
+    custom.disabled = false;
+    custom.placeholder = cfg.custom_label ? 'Type new value...' : 'Type new value...';
+  } else {
+    custom.style.display = 'none';
+    custom.disabled = true;
+  }
+  updateAddFieldState();
+}
+
+function resetFieldInputs() {
+  const input = document.getElementById('fieldValue');
+  const customType = document.getElementById('customTypeInput');
+  const dynamicSelect = document.getElementById('fieldValueSelect');
+  
+  if (dynamicSelect) {
+    if (dynamicSelect.dataset.fieldName) delete enumCache[dynamicSelect.dataset.fieldName];
+    dynamicSelect.remove();
+  }
+  input.style.display = '';
+  input.type = 'text';
+  input.value = '';
+  input.placeholder = 'Field value';
+  input.disabled = false;
+  
+  customType.value = '';
+  customType.style.display = 'none';
+  customType.disabled = true;
+  
+  hideSuggestions();
+  updateAddFieldState();
+}
+
+function getCurrentValue() {
+  const sel = document.getElementById('fieldValueSelect');
+  const customType = document.getElementById('customTypeInput');
+  
+  if (sel && !sel.style.display && sel.style.display !== 'none') {
+    if (customType.style.display !== 'none') {
+      return customType.value.trim() || sel.value;
+    }
+    return sel.value;
+  }
+  return document.getElementById('fieldValue').value.trim();
+}
+
+function updateAddFieldState() {
+  const addBtn = document.getElementById('addFieldBtn');
+  if (selectedAnnotationId === null) {
+    addBtn.disabled = true;
+    return;
+  }
+  
+  const sel = document.getElementById('fieldNameSelect').value;
+  const customName = document.getElementById('customFieldName').value.trim();
+  const fieldName = sel === '__other__' ? customName : sel;
+  
+  const value = getCurrentValue();
+  addBtn.disabled = !(fieldName && value);
+}
+
+function renderExistingFields(fieldsObj) {
+  const box = document.getElementById('existingFields');
+  box.innerHTML = '';
+  const keys = Object.keys(fieldsObj);
+  if (!keys.length) return;
+  
+  keys.forEach(name => {
+    const raw = fieldsObj[name];
+    const val = (raw !== null && typeof raw === 'object') ? raw.field_value : raw;
+    const chip = document.createElement('div');
+    chip.className = 'field-chip';
+    chip.innerHTML = `<span class="chip-name">${escHtml(name)}</span><span class="chip-val">${escHtml(val === null || val === undefined ? '' : String(val))}</span>`;
+    box.appendChild(chip);
+  });
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function doSuggest() {
+  const input = document.getElementById('fieldValue');
+  const list = document.getElementById('suggestionList');
+  const v = input.value.toLowerCase();
+  if (!currentSuggestionField || v.length < 2) {
+    hideSuggestions();
+    return;
+  }
+  
+  try {
+    const r = await fetch('http://localhost:8080/api/suggestions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ field_name: currentSuggestionField, query: v, limit: 10 })
+    });
+    if (!r.ok) { hideSuggestions(); return; }
+    const data = await r.json();
+    const matches = (data.suggestions || []).filter(s => s.toLowerCase().includes(v)).slice(0, 10);
+    if (!matches.length) { hideSuggestions(); return; }
+    
+    list.innerHTML = matches.map(m => `<div class="ac-item">${escHtml(m)}</div>`).join('');
+    list.style.display = 'block';
+    list.style.width = input.offsetWidth + 'px';
+    list.querySelectorAll('.ac-item').forEach((item, mi) => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault();
+        input.value = matches[mi];
+        updateAddFieldState();
+        hideSuggestions();
+      });
+    });
+  } catch (e) {
+    hideSuggestions();
+  }
+}
+
+function onValueKeydown(e) {
+  const list = document.getElementById('suggestionList');
+  if (list.style.display === 'none') {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addField();
+    }
+    return;
+  }
+  
+  const items = list.querySelectorAll('.ac-item');
+  if (!items.length) return;
+  let active = list.querySelector('.ac-item.active');
+  let ai = active ? [...items].indexOf(active) : -1;
+  
+  if (e.key === 'ArrowDown') { e.preventDefault(); ai = Math.min(ai + 1, items.length - 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); ai = Math.max(ai - 1, 0); }
+  else if (e.key === 'Enter' && active) { e.preventDefault(); active.dispatchEvent(new Event('mousedown')); return; }
+  else if (e.key === 'Enter') { e.preventDefault(); hideSuggestions(); addField(); return; }
+  else if (e.key === 'Escape') { hideSuggestions(); return; }
+  else return;
+  
+  items.forEach(it => it.classList.remove('active'));
+  if (items[ai]) items[ai].classList.add('active');
+}
+
+function hideSuggestions() {
+  const list = document.getElementById('suggestionList');
+  if (list) list.style.display = 'none';
+}
+
+function recordCategory(fieldName, value) {
+  fetch('http://localhost:8080/api/field-categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ field_name: fieldName, category_value: value, source: 'manual' })
+  }).catch(e => console.error('Failed to record category:', e));
 }
 
 async function addField() {
-  const fieldName = document.getElementById('fieldNameSelect').value;
-  const fieldValue = document.getElementById('fieldValue').value;
+  const sel = document.getElementById('fieldNameSelect');
+  const customName = document.getElementById('customFieldName');
+  const fieldName = sel.value === '__other__' ? customName.value.trim() : sel.value;
   
-  if (!fieldName || !fieldValue || !selectedAnnotationId) return;
+  if (!fieldName || !selectedAnnotationId) { updateAddFieldState(); return; }
+  
+  const value = getCurrentValue();
+  if (!value) { updateAddFieldState(); return; }
   
   const ann = annotations.find(a => a.id === selectedAnnotationId);
   
   if (ann && ann.localOnly) {
     // Local annotation - store field locally
     if (!ann.fields) ann.fields = {};
-    ann.fields[fieldName] = fieldValue;
+    ann.fields[fieldName] = value;
     ann.dirty = true;
-    document.getElementById('fieldValue').value = '';
+    recordCategory(fieldName, value);
+    resetFieldInputs();
     loadAnnotationFields(selectedAnnotationId);
     renderCanvas();
     return;
   }
+  
+  const cfg = fieldConfigs.find(f => f.name === fieldName);
+  const datatype = (cfg && cfg.datatype) || 'string';
   
   try {
     const r = await fetch(`http://localhost:8080/api/annotations/${selectedAnnotationId}/fields`, {
@@ -731,18 +1018,22 @@ async function addField() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         field_name: fieldName,
-        field_value: fieldValue
+        field_value: value,
+        datatype: datatype,
+        field_config_json: null
       })
     });
     
     if (r.ok) {
-      document.getElementById('fieldValue').value = '';
+      recordCategory(fieldName, value);
+      resetFieldInputs();
       loadAnnotationFields(selectedAnnotationId);
     } else {
       alert('Failed: ' + await r.text());
     }
   } catch (e) {
     console.error('Error:', e);
+    alert('Error adding field: ' + e.message);
   }
 }
 
@@ -1084,4 +1375,154 @@ async function updateAnnotationOnServer(ann) {
     console.error('Error updating annotation:', e);
     return false;
   }
+}
+
+// ===== Export + S3 =====
+
+function buildS3Config() {
+  return {
+    enabled: true,
+    bucket: document.getElementById('s3Bucket').value.trim(),
+    region: document.getElementById('s3Region').value.trim() || 'us-east-1',
+    prefix: 'datasets/',
+    multipart_threshold_mb: 100,
+    multipart_chunksize_mb: 50,
+    fetch_on_startup: false,
+    fetch: { exports: true, snapshots: true, cursor: true, verify_checksums: true },
+    push: { exports: true, snapshots: true, cursor: true, overwrite: false },
+    max_bandwidth_mbps: 0,
+    access_key_id: document.getElementById('s3AccessKey').value.trim(),
+    secret_access_key: document.getElementById('s3SecretKey').value.trim(),
+    endpoint_url: document.getElementById('s3Endpoint').value.trim()
+  };
+}
+
+function persistS3Config() {
+  const data = {
+    region: document.getElementById('s3Region').value.trim(),
+    accessKey: document.getElementById('s3AccessKey').value.trim(),
+    secretKey: document.getElementById('s3SecretKey').value.trim(),
+    bucket: document.getElementById('s3Bucket').value.trim(),
+    endpoint: document.getElementById('s3Endpoint').value.trim()
+  };
+  localStorage.setItem('datasetAnnotatorS3', JSON.stringify(data));
+}
+
+function loadS3ConfigFromStorage() {
+  try {
+    const raw = localStorage.getItem('datasetAnnotatorS3');
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (d.region) document.getElementById('s3Region').value = d.region;
+    if (d.accessKey) document.getElementById('s3AccessKey').value = d.accessKey;
+    if (d.secretKey) document.getElementById('s3SecretKey').value = d.secretKey;
+    if (d.bucket) document.getElementById('s3Bucket').value = d.bucket;
+    if (d.endpoint) document.getElementById('s3Endpoint').value = d.endpoint;
+  } catch (e) {
+    console.error('Failed to load S3 config:', e);
+  }
+}
+
+function setExportStatus(msg) {
+  document.getElementById('exportStatus').textContent = msg || '';
+}
+
+async function saveS3Config() {
+  setExportStatus('Saving S3 config...');
+  try {
+    const r = await fetch('http://localhost:8080/api/s3/save-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: buildS3Config() })
+    });
+    const data = await r.json();
+    if (r.ok && data.success) {
+      persistS3Config();
+      setExportStatus(data.message || 'S3 config saved');
+    } else {
+      setExportStatus('Failed: ' + (data.message || await r.text()));
+    }
+  } catch (e) {
+    setExportStatus('S3 config error: ' + e.message);
+  }
+}
+
+async function testS3Connection() {
+  setExportStatus('Testing S3 connection...');
+  try {
+    const r = await fetch('http://localhost:8080/api/s3/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: buildS3Config() })
+    });
+    const data = await r.json();
+    setExportStatus(data.message || (data.success ? 'Connected' : 'Failed'));
+  } catch (e) {
+    setExportStatus('S3 test error: ' + e.message);
+  }
+}
+
+async function runExport(pushS3) {
+  if (!currentDatasetId) {
+    setExportStatus('No dataset loaded');
+    return;
+  }
+  
+  setExportStatus(pushS3 ? 'Configuring S3 then exporting...' : 'Running full export...');
+  
+  try {
+    if (pushS3) {
+      const saveRes = await fetch('http://localhost:8080/api/s3/save-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: buildS3Config() })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || !saveData.success) {
+        setExportStatus('S3 config save failed: ' + (saveData.message || ''));
+        return;
+      }
+      persistS3Config();
+      setExportStatus('Exporting & uploading to S3...');
+    }
+    
+    const r = await fetch('http://localhost:8080/api/export/full', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataset_id: currentDatasetId, type: 'full', push_s3: pushS3, formats: ['parquet'] })
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      setExportStatus('Export failed: ' + (data.message || ''));
+      return;
+    }
+    pollExportStatus(data.export_id);
+  } catch (e) {
+    setExportStatus('Export error: ' + e.message);
+  }
+}
+
+async function pollExportStatus(exportId) {
+  const tries = 30;
+  for (let i = 0; i < tries; i++) {
+    await new Promise(res => setTimeout(res, 2000));
+    try {
+      const r = await fetch(`http://localhost:8080/api/export/status/${exportId}`);
+      if (!r.ok) continue;
+      const st = await r.json();
+      if (st.status === 'completed') {
+        const paths = (st.output_paths || []).slice(0, 3).join('\n');
+        setExportStatus(`Export complete! ${paths ? '\n' + paths : ''}`);
+        return;
+      }
+      if (st.status === 'failed') {
+        setExportStatus('Export failed: ' + (st.error || 'unknown error'));
+        return;
+      }
+      setExportStatus(`Exporting... ${Math.round((st.progress || 0) * 100)}%`);
+    } catch (e) {
+      // transient poll errors - keep waiting
+    }
+  }
+  setExportStatus('Export still running - check server logs.');
 }
