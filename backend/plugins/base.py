@@ -12,16 +12,24 @@ from backend.database import Database
 class Geometry:
     type: str
     coordinates: list[list[float]] | list[float]
+    rotation: float = 0
 
     def to_json(self) -> str:
         import json
-        return json.dumps({"type": self.type, "coordinates": self.coordinates})
+        data = {"type": self.type, "coordinates": self.coordinates}
+        if self.rotation:
+            data["rotation"] = self.rotation
+        return json.dumps(data)
 
     @classmethod
     def from_json(cls, json_str: str) -> Geometry:
         import json
         data = json.loads(json_str)
-        return cls(type=data["type"], coordinates=data["coordinates"])
+        return cls(
+            type=data["type"],
+            coordinates=data["coordinates"],
+            rotation=data.get("rotation", 0) or 0,
+        )
 
 
 @dataclass

@@ -138,6 +138,10 @@ class ImagePlugin(BasePlugin):
 
                     crop = img.crop((left, top, right, bottom))
 
+                    rotation = getattr(geometry, "rotation", 0) or 0
+                    if rotation:
+                        crop = crop.rotate(-rotation, expand=True, resample=Image.Resampling.BICUBIC)
+
                 elif geometry.type == "polygon":
                     coords = geometry.coordinates
                     mask = Image.new("L", (img_width, img_height), 0)

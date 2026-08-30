@@ -63,6 +63,7 @@ class DataItemListResponse(BaseModel):
 class AnnotationGeometry(BaseModel):
     type: Literal["rectangle", "rotated_rectangle", "polygon", "point", "line"]
     coordinates: list[list[float]] | list[float]
+    rotation: float = 0
 
 
 class AnnotationCreate(BaseModel):
@@ -156,6 +157,7 @@ class ExportEstimateResponse(BaseModel):
     annotation_count: int
     image_count: int
     crop_count: int
+    output_path: str
 
 
 class ExportRequest(BaseModel):

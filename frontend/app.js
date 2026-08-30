@@ -150,10 +150,10 @@ async function loadTree(datasetId) {
     }
     const data = await r.json();
     treeNodes = data.nodes || [];
-    treeItems = data.items || [];
-    totalItems = treeItems.length;
+    totalItems = (data.items || []).length;
+    treeItems = orderTreeItems(data.items || [], treeNodes);
     treeExpanded = new Set();
-    seedExpanded(treeNodes, '');
+    seedExpanded(treeNodes, '', 0);
     renderTree();
     if (treeItems.length > 0) {
       setTreeStatus(treeItems.length + ' image(s)');
@@ -166,12 +166,25 @@ async function loadTree(datasetId) {
   }
 }
 
-function seedExpanded(nodes, prefix) {
+function orderTreeItems(items, nodes) {
+  const byId = new Map(items.map(i => [i.id, i]));
+  const orderedIds = [];
+  const walk = (ns) => {
+    (ns || []).forEach(n => {
+      if (n.type === 'file') orderedIds.push(n.item_id);
+      else walk(n.children || []);
+    });
+  };
+  walk(nodes);
+  return orderedIds.map(id => byId.get(id)).filter(Boolean);
+}
+
+function seedExpanded(nodes, prefix, depth) {
   nodes.forEach(n => {
     if (n.type === 'dir') {
       const key = prefix + '/' + n.name;
-      treeExpanded.add(key);
-      seedExpanded(n.children, key);
+      if (depth < 1) treeExpanded.add(key);
+      seedExpanded(n.children, key, depth + 1);
     }
   });
 }
@@ -242,6 +255,14 @@ function renderTree() {
   if (ul) box.appendChild(ul);
 }
 
+function countFiles(nodes) {
+  let c = 0;
+  (nodes || []).forEach(n => {
+    c += n.type === 'file' ? 1 : countFiles(n.children || []);
+  });
+  return c;
+}
+
 function renderTreeNodes(nodes, prefix) {
   if (!nodes || !nodes.length) return null;
   const ul = document.createElement('ul');
@@ -254,6 +275,7 @@ function renderTreeNodes(nodes, prefix) {
       const open = treeExpanded.has(key);
       if (open) li.classList.add('open');
       li.dataset.dir = key;
+      li.title = key.replace(/^\//, '');
       const caret = document.createElement('span');
       caret.className = 'tree-caret';
       caret.textContent = open ? '▾' : '▸';
@@ -262,6 +284,11 @@ function renderTreeNodes(nodes, prefix) {
       name.textContent = n.name;
       li.appendChild(caret);
       li.appendChild(name);
+      const cnt = countFiles(n.children || []);
+      const count = document.createElement('span');
+      count.className = 'tree-count';
+      count.textContent = cnt > 0 ? String(cnt) : '';
+      li.appendChild(count);
       if (open) {
         const sub = renderTreeNodes(n.children, key);
         if (sub) li.appendChild(sub);
@@ -269,6 +296,7 @@ function renderTreeNodes(nodes, prefix) {
     } else {
       if (n.status === 'done') li.classList.add('done');
       li.dataset.item = n.item_id;
+      li.title = n.rel_path || n.name;
       const status = document.createElement('span');
       status.className = 'tree-status';
       status.textContent = n.status === 'done' ? '✓' : '';
@@ -470,6 +498,25 @@ function setupEventListeners() {
   // Operations: export + S3
   document.getElementById('exportBtn').addEventListener('click', () => runExport(false));
   document.getElementById('exportS3Btn').addEventListener('click', () => runExport(true));
+  document.getElementById('exportConfirmOk').addEventListener('click', () => {
+    const fn = pendingExportConfirm;
+    pendingExportConfirm = null;
+    if (fn) fn();
+  });
+  document.getElementById('exportConfirmCancel').addEventListener('click', () => {
+    pendingExportConfirm = null;
+    closeExportConfirm();
+  });
+  document.getElementById('exportConfirmClose').addEventListener('click', () => {
+    pendingExportConfirm = null;
+    closeExportConfirm();
+  });
+  document.getElementById('exportConfirmModal').addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'exportConfirmModal') {
+      pendingExportConfirm = null;
+      closeExportConfirm();
+    }
+  });
   document.getElementById('s3SaveBtn').addEventListener('click', saveS3Config);
   document.getElementById('s3TestBtn').addEventListener('click', testS3Connection);
 }
@@ -1801,12 +1848,71 @@ async function testS3Connection() {
   }
 }
 
+function formatBytesHuman(gb) {
+  if (gb >= 1) return gb + ' GB';
+  const mb = gb * 1024;
+  if (mb >= 1) return (Math.round(mb * 10) / 10) + ' MB';
+  return Math.round(mb * 1024) + ' KB';
+}
+
+function exportConfirmVisible() {
+  return document.getElementById('exportConfirmModal').style.display !== 'none';
+}
+
+function closeExportConfirm() {
+  document.getElementById('exportConfirmModal').style.display = 'none';
+}
+
+function showExportConfirm(summary) {
+  document.getElementById('exportConfirmSummary').innerHTML = summary;
+  document.getElementById('exportConfirmModal').style.display = 'flex';
+}
+
+let pendingExportConfirm = null;
+
+function confirmExportModal(onOk) {
+  pendingExportConfirm = onOk;
+}
+
 async function runExport(pushS3) {
   if (!currentDatasetId) {
     setExportStatus('No dataset loaded');
     return;
   }
-  
+
+  try {
+    setExportStatus('Estimating export...');
+    const estR = await fetch(`${API_BASE}/api/export/estimate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataset_id: currentDatasetId, type: 'full' })
+    });
+    if (!estR.ok) {
+      setExportStatus('Estimate failed: ' + (await estR.text()).slice(0, 300));
+      return;
+    }
+    const est = await estR.json();
+
+    const size = formatBytesHuman(est.estimated_size_gb);
+    showExportConfirm(`
+      <div style="margin-bottom:0.5rem;">You are about to export <b>${est.image_count}</b> image file(s), <b>${est.annotation_count}</b> annotation(s), <b>${est.crop_count}</b> crop image(s).</div>
+      <div style="margin-bottom:0.5rem;">Estimated size: <b>${size}</b></div>
+      <div style="margin-bottom:0.5rem;">Estimated time: <b>~${est.estimated_time_minutes} min</b> (at 100 Mbps throughput)</div>
+      <div style="margin-bottom:0.5rem;">Output file:</div>
+      <code style="display:block;background:#0f172a;border:1px solid #334155;padding:0.4rem;border-radius:4px;word-break:break-all;font-size:0.7rem;">${est.output_path}</code>
+      ${pushS3 ? '<div style="margin-top:0.5rem;color:#fbbf24;">Also uploading to S3 after export.</div>' : ''}
+    `);
+
+    confirmExportModal(async () => {
+      closeExportConfirm();
+      await startExport(pushS3);
+    });
+  } catch (e) {
+    setExportStatus('Export error: ' + e.message);
+  }
+}
+
+async function startExport(pushS3) {
   setExportStatus(pushS3 ? 'Configuring S3 then exporting...' : 'Running full export...');
   
   try {
@@ -1850,8 +1956,7 @@ async function pollExportStatus(exportId) {
       if (!r.ok) continue;
       const st = await r.json();
       if (st.status === 'completed') {
-        const paths = (st.output_paths || []).slice(0, 3).join('\n');
-        setExportStatus(`Export complete! ${paths ? '\n' + paths : ''}`);
+        setExportStatus('Export complete!\n' + (st.output_paths || []).join('\n'));
         return;
       }
       if (st.status === 'failed') {

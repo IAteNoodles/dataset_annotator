@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from backend.config import AppConfig
@@ -75,12 +77,17 @@ async def estimate_export_size(
     estimated_time_seconds = (estimated_bytes / (1024 ** 2)) / throughput_mbps
     estimated_time_minutes = max(1, int(estimated_time_seconds / 60) + 1)
 
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path(config.export.output_dir).resolve()
+    primary = output_dir / f"{config.dataset.name}_{timestamp}.parquet"
+
     return ExportEstimateResponse(
         estimated_size_gb=round(estimated_size_gb, 2),
         estimated_time_minutes=estimated_time_minutes,
         annotation_count=annotation_count,
         image_count=image_count,
         crop_count=crop_count,
+        output_path=str(primary),
     )
 
 

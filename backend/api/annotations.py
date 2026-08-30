@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.deps import get_config, get_db
+from backend.plugins.base import Geometry
 from backend.models import (
     AnnotationCreate, AnnotationUpdate, AnnotationResponse,
     AnnotationWithFields, AnnotationFieldCreate, AnnotationFieldUpdate, AnnotationFieldResponse,
@@ -108,7 +109,7 @@ async def update_annotation(annotation_id: int, update: AnnotationUpdate) -> Ann
         updates.append("geometry_json = ?")
         params.append(json.dumps(update.geometry.model_dump()))
 
-        if config.plugin_config.crops.auto_save and config.plugin_config.crops.enabled:
+        if config.plugin_config.crops.auto_save:
             data_item = await db.fetchone("SELECT * FROM data_items WHERE id = ?", (ann["data_item_id"],))
             if data_item:
                 crop_result = await plugin.regenerate_crop(
@@ -286,11 +287,16 @@ async def duplicate_annotation(annotation_id: int) -> AnnotationResponse:
             (new_ann_id, field["field_name"], field["field_value"], field["datatype"], field["field_config_json"])
         )
 
-    if config.plugin_config.crops.auto_save and config.plugin_config.crops.enabled:
+    if config.plugin_config.crops.auto_save:
         plugin = plugin_registry.get_for_dataset(config)
         data_item = await db.fetchone("SELECT * FROM data_items WHERE id = ?", (ann["data_item_id"],))
         if data_item:
-            geometry = plugin.canvas_to_geometry(json.loads(geometry_json))
+            g = json.loads(geometry_json)
+            geometry = Geometry(
+                type=g["type"],
+                coordinates=g["coordinates"],
+                rotation=g.get("rotation", 0) or 0,
+            )
             crop_result = await plugin.create_crop(db, config, data_item, new_ann_id, geometry)
             if crop_result:
                 await db.execute(
