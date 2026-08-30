@@ -83,6 +83,11 @@ async function init() {
   setupCanvas();
   setupEventListeners();
   setupSidebarResizer();
+  fitCanvasToContainer();
+  window.addEventListener('resize', () => {
+    fitCanvasToContainer();
+    layoutImage();
+  });
   renderCanvas();
 }
 
@@ -339,18 +344,33 @@ function setupSidebarResizer() {
   });
 }
 
+function fitCanvasToContainer() {
+  const wrap = document.querySelector('.canvas-wrapper');
+  if (!wrap) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(100, Math.round(wrap.clientWidth * dpr));
+  canvas.height = Math.max(100, Math.round(wrap.clientHeight * dpr));
+}
+
+function layoutImage() {
+  if (!currentImage) return;
+  const dpr = window.devicePixelRatio || 1;
+  const pad = 8 * dpr;
+  const maxW = canvas.width - pad * 2;
+  const maxH = canvas.height - pad * 2;
+  imageScale = Math.min(maxW / currentImage.width, maxH / currentImage.height);
+  imageOffset.x = (canvas.width - currentImage.width * imageScale) / 2;
+  imageOffset.y = (canvas.height - currentImage.height * imageScale) / 2;
+  renderCanvas();
+}
+
 async function loadImage(item) {
   currentDataItemId = item.id;
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
     currentImage = img;
-    const maxW = canvas.width - 40;
-    const maxH = canvas.height - 40;
-    imageScale = Math.min(maxW / img.width, maxH / img.height, 1);
-    imageOffset.x = (canvas.width - img.width * imageScale) / 2;
-    imageOffset.y = (canvas.height - img.height * imageScale) / 2;
-    renderCanvas();
+    layoutImage();
   };
   img.onerror = (e) => {
     console.error('Image load error:', e);
@@ -940,7 +960,7 @@ function selectAnnotation(annId) {
   
   if (ann) {
     loadAnnotationFields(annId);
-    loadCropPreview(ann);
+    renderCropPreview(ann);
   }
 }
 
@@ -960,6 +980,7 @@ async function loadAnnotationFields(annId) {
     if (localAnn && localAnn.localOnly) {
       // Local annotation - use local fields
       renderFieldPanel(localAnn.fields || {});
+      renderCanvas();
       return;
     }
     
@@ -968,7 +989,10 @@ async function loadAnnotationFields(annId) {
     if (r.ok) {
       const data = await r.json();
       const fields = data.fields || {};
+      const ann = annotations.find(a => a.id === annId);
+      if (ann) ann.fields = fields;
       renderFieldPanel(fields);
+      renderCanvas();
       return;
     }
     
@@ -1279,6 +1303,7 @@ async function addField() {
       recordCategory(fieldName, value);
       resetFieldInputs();
       loadAnnotationFields(selectedAnnotationId);
+      renderCanvas();
     } else {
       alert('Failed: ' + await r.text());
     }
@@ -1436,6 +1461,10 @@ function renderCanvas() {
     const isSelected = ann.id === selectedAnnotationId;
     drawAnnotation(ann, isSelected);
   });
+
+  // Live crop preview for the selected annotation
+  const selAnn = annotations.find(a => a.id === selectedAnnotationId);
+  if (selAnn) renderCropPreview(selAnn);
   
   // Draw current drawing
   if (currentDrawRect) {
@@ -1449,6 +1478,25 @@ function renderCanvas() {
     ctx.strokeRect(sx, sy, sw, sh);
     ctx.setLineDash([]);
   }
+}
+
+function getAnnotationLabel(ann) {
+  const fields = ann.fields;
+  if (!fields) return '';
+  const pick = (v) => {
+    if (v === null || v === undefined) return '';
+    return typeof v === 'object' ? (v.field_value ?? v.value ?? '') : v;
+  };
+  for (const f of fieldConfigs) {
+    if (f.internal || f.hidden || f.datatype === 'json') continue;
+    const v = pick(fields[f.name]);
+    if (String(v).trim() !== '') return String(v);
+  }
+  for (const k of Object.keys(fields)) {
+    const v = pick(fields[k]);
+    if (String(v).trim() !== '') return String(v);
+  }
+  return '';
 }
 
 function drawAnnotation(ann, isSelected) {
@@ -1520,6 +1568,22 @@ function drawAnnotation(ann, isSelected) {
   if (isSelected && bounds && !ann.is_locked) {
     drawHandles(bounds);
   }
+
+  // Field-value label
+  const label = getAnnotationLabel(ann);
+  if (label && bounds) {
+    ctx.font = '12px sans-serif';
+    const tw = ctx.measureText(label).width;
+    const labelTop = bounds.y - (isSelected ? 50 : 26);
+    const lx = bounds.cx - tw / 2 - 6;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.beginPath();
+    ctx.roundRect(lx, labelTop, tw + 12, 18, 3);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, bounds.cx, labelTop + 13);
+  }
   
   return bounds;
 }
@@ -1567,49 +1631,62 @@ function drawHandles(bounds) {
   ctx.fillText('Rotate', bounds.cx, rotateY - 12);
 }
 
-async function loadCropPreview(ann) {
+function renderCropPreview(ann) {
   const cropCanvas = document.getElementById('cropCanvas');
   const cropPreview = document.getElementById('cropPreview');
-  
-  // For local annotations, try to generate crop from geometry (no server call)
-  if (ann.localOnly) {
+  if (!currentImage || !cropCanvas) {
     cropPreview.style.display = 'none';
     return;
   }
-  
-  if (!ann.crop_path) {
-    cropPreview.style.display = 'none';
-    return;
-  }
-  
-  try {
-    const r = await fetch(`${API_BASE}/api/images/crop/${ann.id}`);
-    if (!r.ok) {
+
+  let geom;
+  try { geom = JSON.parse(ann.geometry_json); }
+  catch (e) { cropPreview.style.display = 'none'; return; }
+
+  let x1, y1, x2, y2;
+  switch (ann.annotation_type) {
+    case 'rectangle':
+      x1 = geom.coordinates[0][0]; y1 = geom.coordinates[0][1];
+      x2 = geom.coordinates[1][0]; y2 = geom.coordinates[1][1];
+      break;
+    case 'point':
+      x1 = geom.coordinates[0] - 15; y1 = geom.coordinates[1] - 15;
+      x2 = geom.coordinates[0] + 15; y2 = geom.coordinates[1] + 15;
+      break;
+    case 'line':
+      x1 = geom.coordinates[0][0]; y1 = geom.coordinates[0][1];
+      x2 = geom.coordinates[1][0]; y2 = geom.coordinates[1][1];
+      if (x1 > x2) { const t = x1; x1 = x2; x2 = t; }
+      if (y1 > y2) { const t = y1; y1 = y2; y2 = t; }
+      x1 -= 10; y1 -= 10; x2 += 10; y2 += 10;
+      break;
+    default:
       cropPreview.style.display = 'none';
       return;
-    }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    
-    const img = new Image();
-    img.onload = () => {
-      const ctx = cropCanvas.getContext('2d');
-      ctx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
-      
-      const scale = Math.min(cropCanvas.width / img.width, cropCanvas.height / img.height);
-      const dw = img.width * scale;
-      const dh = img.height * scale;
-      const dx = (cropCanvas.width - dw) / 2;
-      const dy = (cropCanvas.height - dh) / 2;
-      
-      ctx.drawImage(img, dx, dy, dw, dh);
-      cropPreview.style.display = 'block';
-    };
-    img.src = url;
-  } catch (e) {
-    console.error('Failed to load crop preview:', e);
-    cropPreview.style.display = 'none';
   }
+
+  const w = x2 - x1;
+  const h = y2 - y1;
+  if (w <= 0 || h <= 0) { cropPreview.style.display = 'none'; return; }
+
+  const cctx = cropCanvas.getContext('2d');
+  cctx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
+  cctx.fillStyle = '#f1f5f9';
+  cctx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+
+  const rotRad = (geom.rotation || 0) * Math.PI / 180;
+  const scale = Math.min(cropCanvas.width / w, cropCanvas.height / h);
+
+  cctx.save();
+  cctx.translate(cropCanvas.width / 2, cropCanvas.height / 2);
+  if (rotRad) cctx.rotate(rotRad);
+  cctx.drawImage(
+    currentImage, x1, y1, w, h,
+    -w * scale / 2, -h * scale / 2, w * scale, h * scale
+  );
+  cctx.restore();
+
+  cropPreview.style.display = 'block';
 }
 
 async function updateAnnotationOnServer(ann) {
