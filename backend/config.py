@@ -35,7 +35,7 @@ class PluginDisplayConfig(BaseModel):
 
 class PluginCropsConfig(BaseModel):
     auto_save: bool = True
-    output_dir: str = "crops"
+    output_dir: str = ".crops"
     naming_template: str = "{dataset}_{item_id}_{annotation_id}"
     format: Literal["png", "jpeg", "webp"] = "png"
     quality: int = 95

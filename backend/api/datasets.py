@@ -116,6 +116,10 @@ def build_tree(items: list[dict]) -> list[dict]:
         if not parts:
             continue
 
+        # Hide generated crops and any hidden folders from the tree.
+        if parts[0] in (".crops", "crops") or any(p.startswith(".") for p in parts):
+            continue
+
         cur = index[dir_key(root)]
         for part in parts[:-1]:
             nxt = next(

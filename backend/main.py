@@ -165,7 +165,16 @@ async def serve_crop(annotation_id: int):
 async def reset_db():
     from backend.deps import get_db
     db = get_db()
-    
+
+    # Delete crop files on disk so a reset also clears generated crops.
+    from backend.deps import get_config
+    config = get_config()
+    crops_dir = Path(config.dataset.path) / ".crops"
+    if crops_dir.exists():
+        for f in crops_dir.rglob("*"):
+            if f.is_file():
+                f.unlink(missing_ok=True)
+
     await db.execute('DELETE FROM annotations')
     await db.execute('DELETE FROM annotation_fields')
     await db.execute('DELETE FROM field_categories')

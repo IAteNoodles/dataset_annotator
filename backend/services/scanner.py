@@ -53,6 +53,12 @@ async def scan_dataset(db: Database, config: AppConfig) -> dict[str, int]:
 
     for idx, file_path in enumerate(files):
         rel_path = file_path.relative_to(root_path)
+
+        # Skip hidden folders (e.g. .crops) so generated crops never become items.
+        if any(part.startswith(".") for part in rel_path.parts):
+            skipped += 1
+            continue
+
         stat = file_path.stat()
         mime_type, _ = mimetypes.guess_type(str(file_path))
 
@@ -96,6 +102,15 @@ async def scan_dataset(db: Database, config: AppConfig) -> dict[str, int]:
         (dataset_id,)
     )
 
+    # Remove stale crop entries (legacy visible "crops/" dir and the hidden ".crops/").
+    # GLOB matches any path separator on both Windows and Linux.
+    await db.execute(
+        """DELETE FROM data_items WHERE dataset_id = ?
+           AND (rel_path GLOB 'crops/*' OR rel_path GLOB 'crops\*'
+                OR rel_path GLOB '.crops/*' OR rel_path GLOB '.crops\*')""",
+        (dataset_id,)
+    )
+
     return {
         "dataset_id": dataset_id,
         "scanned": len(files),
@@ -134,7 +149,7 @@ async def _batch_upsert_items(db: Database, batch: list[tuple]) -> tuple[int, in
                     source_path = ?, mime_type = ?, size_bytes = ?, sha256 = ?,
                     width = ?, height = ?, metadata_json = ?, updated_at = CURRENT_TIMESTAMP
                    WHERE id = ?""",
-                (*item[1:10], existing["id"])
+                (item[1], item[3], item[4], item[5], item[6], item[7], item[9], existing["id"])
             )
             updated += 1
         else:

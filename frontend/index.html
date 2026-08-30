@@ -262,29 +262,9 @@
 
       <div id="folderTree" class="folder-tree"></div>
 
-      <button id="operationsToggleBtn" class="btn-primary ops-toggle">Operations ▸</button>
-      <div id="operationsPanel" style="display:none;">
-        <button id="exportBtn" class="btn-primary" style="margin-bottom:0.5rem;">Export Parquet</button>
-        <button id="exportS3Btn" class="btn-primary" style="margin-bottom:0.5rem;">Export → S3</button>
-        <div style="margin-top:0.5rem;">
-          <label class="s3-label">AWS Region</label>
-          <input type="text" id="s3Region" class="s3-input" placeholder="us-east-1" autocomplete="off">
-          <label class="s3-label">Access Key</label>
-          <input type="text" id="s3AccessKey" class="s3-input" placeholder="AKIA..." autocomplete="off">
-          <label class="s3-label">Secret Key</label>
-          <input type="password" id="s3SecretKey" class="s3-input" placeholder="..." autocomplete="off">
-          <label class="s3-label">Bucket</label>
-          <input type="text" id="s3Bucket" class="s3-input" placeholder="my-dataset-bucket" autocomplete="off">
-          <label class="s3-label">Endpoint URL (optional)</label>
-          <input type="text" id="s3Endpoint" class="s3-input" placeholder="https://..." autocomplete="off">
-          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
-            <button id="s3SaveBtn" class="button-small secondary">Save Config</button>
-            <button id="s3TestBtn" class="button-small secondary">Test</button>
-          </div>
-          <div id="exportStatus" class="export-status" style="margin-top:0.5rem;"></div>
-        </div>
-      </div>
+      <button id="operationsToggleBtn" class="btn-primary ops-toggle">Operations</button>
     </div>
+    <div id="sidebarResizer" class="sidebar-resizer" title="Drag to resize"></div>
 
     <div class="main">
       <div class="toolbar">
@@ -340,6 +320,36 @@
       <div class="annotation-list">
         <h4 style="font-size:0.75rem;color:#64748b;margin-bottom:0.5rem;">Annotations</h4>
         <div id="annotationList"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="opsModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Operations</h3>
+        <button id="opsCloseBtn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <button id="exportBtn" class="btn-primary" style="margin-bottom:0.5rem;">Export Parquet</button>
+        <button id="exportS3Btn" class="btn-primary" style="margin-bottom:0.5rem;">Export → S3</button>
+        <div style="margin-top:0.5rem;">
+          <label class="s3-label">AWS Region</label>
+          <input type="text" id="s3Region" class="s3-input" placeholder="us-east-1" autocomplete="off">
+          <label class="s3-label">Access Key</label>
+          <input type="text" id="s3AccessKey" class="s3-input" placeholder="AKIA..." autocomplete="off">
+          <label class="s3-label">Secret Key</label>
+          <input type="password" id="s3SecretKey" class="s3-input" placeholder="..." autocomplete="off">
+          <label class="s3-label">Bucket</label>
+          <input type="text" id="s3Bucket" class="s3-input" placeholder="my-dataset-bucket" autocomplete="off">
+          <label class="s3-label">Endpoint URL (optional)</label>
+          <input type="text" id="s3Endpoint" class="s3-input" placeholder="https://..." autocomplete="off">
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+            <button id="s3SaveBtn" class="button-small secondary">Save Config</button>
+            <button id="s3TestBtn" class="button-small secondary">Test</button>
+          </div>
+          <div id="exportStatus" class="export-status" style="margin-top:0.5rem;"></div>
+        </div>
       </div>
     </div>
   </div>

@@ -59,6 +59,7 @@ async function init() {
   await setupDataset();
   setupCanvas();
   setupEventListeners();
+  setupSidebarResizer();
   renderCanvas();
 }
 
@@ -285,11 +286,34 @@ function setTreeStatus(msg) {
 }
 
 function toggleOperations() {
-  const panel = document.getElementById('operationsPanel');
-  const btn = document.getElementById('operationsToggleBtn');
-  const open = panel.style.display === 'block';
-  panel.style.display = open ? 'none' : 'block';
-  btn.textContent = open ? 'Operations ▸' : 'Operations ▾';
+  document.getElementById('opsModal').style.display = 'flex';
+}
+
+function closeOperations() {
+  document.getElementById('opsModal').style.display = 'none';
+}
+
+function setupSidebarResizer() {
+  const resizer = document.getElementById('sidebarResizer');
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    document.body.classList.add('resizing');
+    resizer.classList.add('active');
+    const startX = e.clientX;
+    const startW = document.querySelector('.sidebar').getBoundingClientRect().width;
+    const move = (ev) => {
+      const w = Math.min(800, Math.max(180, startW + (ev.clientX - startX)));
+      document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+    };
+    const up = () => {
+      document.body.classList.remove('resizing');
+      resizer.classList.remove('active');
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
 }
 
 async function loadImage(item) {
@@ -365,6 +389,13 @@ function setupEventListeners() {
 
   // Operations toggle
   document.getElementById('operationsToggleBtn').addEventListener('click', toggleOperations);
+  document.getElementById('opsCloseBtn').addEventListener('click', closeOperations);
+  document.getElementById('opsModal').addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'opsModal') closeOperations();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeOperations();
+  });
 
   // Lock/unlock/delete
   document.getElementById('lockBtn').addEventListener('click', () => toggleLock(true));
@@ -1319,7 +1350,21 @@ function renderAnnotationList() {
   annotations.forEach(ann => {
     const div = document.createElement('div');
     div.className = 'annotation-item' + (ann.id === selectedAnnotationId ? ' selected' : '');
-    div.innerHTML = `
+    
+    if (!ann.localOnly) {
+      const img = document.createElement('img');
+      img.className = 'ann-crop';
+      img.alt = 'crop';
+      img.style.display = 'none';
+      img.addEventListener('load', () => { img.style.display = 'block'; });
+      img.addEventListener('error', () => { img.style.display = 'none'; });
+      img.src = `${API_BASE}/api/images/crop/${ann.id}`;
+      div.appendChild(img);
+    }
+    
+    const info = document.createElement('div');
+    info.className = 'ann-info';
+    info.innerHTML = `
       <strong>${ann.annotation_type || 'unknown'}</strong>
       ${ann.localOnly ? '<span style="color:#f59e0b;font-size:0.6rem;">(local)</span>' : ''}
       ${ann.dirty ? '<span style="color:#3b82f6;font-size:0.6rem;">(unsaved)</span>' : ''}
@@ -1327,6 +1372,8 @@ function renderAnnotationList() {
         ${ann.is_locked ? 'Locked' : 'Unlocked'}
       </span>
     `;
+    div.appendChild(info);
+    
     div.addEventListener('click', () => selectAnnotation(ann.id));
     listEl.appendChild(div);
   });
