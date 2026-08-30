@@ -1,0 +1,32 @@
+dataset:
+  name: "medical_documents"
+  path: "C:/Users/Noodl/Projects/FuckAround/MJ/OCRs/H-1/DataDump/Prescription_Dataset(600)"
+  recursive: true
+  extensions: [".jpg", ".jpeg", ".png", ".tiff", ".bmp"]
+
+annotation:
+  types: ["rect", "poly", "rrect"]
+  default_type: "rect"
+
+ui:
+  theme: "dark"
+  colors:
+    medicine: "#e94560"
+    dosage: "#0f0"
+    frequency: "#ff0"
+    duration: "#0af"
+    condition: "#f90"
+    time: "#f0f"
+    other: "#aaa"
+  types:
+    - "medicine"
+    - "dosage"
+    - "frequency"
+    - "duration"
+    "condition"
+    "time"
+    "other"
+
+storage:
+  db_path: "data/annotator.db"
+  crops_dir: "crops"

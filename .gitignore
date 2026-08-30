@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+exports/
+snapshots/
+recovered_test/
+session-*.md
+pytest_output.txt
+*.db
+*.db-shm
+*.db-wal
