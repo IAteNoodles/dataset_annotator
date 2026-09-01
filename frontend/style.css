@@ -124,6 +124,17 @@ body.resizing {
   color: #cbd5e1;
 }
 
+.tree-node.open {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.tree-node.open > ul.tree-list {
+  flex: 1 0 100%;
+  order: 10;
+  white-space: normal;
+}
+
 .tree-node:hover {
   background: rgba(148, 163, 184, 0.15);
 }

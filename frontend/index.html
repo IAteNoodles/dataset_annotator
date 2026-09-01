@@ -327,6 +327,17 @@
       <div class="modal-body">
         <button id="exportBtn" class="btn-primary" style="margin-bottom:0.5rem;">Export Parquet</button>
         <button id="exportS3Btn" class="btn-primary" style="margin-bottom:0.5rem;">Export → S3</button>
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
+          <label for="exportMode" style="font-size:0.75rem;color:#94a3b8;">Export:</label>
+          <select id="exportMode" class="s3-input" style="flex:1;">
+            <option value="annotated">Only annotated images</option>
+            <option value="full">All images (annotated + unannotated)</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
+          <input type="checkbox" id="verifyImages" style="width:auto;">
+          <label for="verifyImages" style="font-size:0.75rem;color:#94a3b8;">Verify exported images (hash check)</label>
+        </div>
         <div style="margin-top:0.5rem;">
           <label class="s3-label">AWS Region</label>
           <input type="text" id="s3Region" class="s3-input" placeholder="us-east-1" autocomplete="off">

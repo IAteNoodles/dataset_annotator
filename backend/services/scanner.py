@@ -48,11 +48,23 @@ async def scan_dataset(db: Database, config: AppConfig) -> dict[str, int]:
     updated = 0
     skipped = 0
 
+    # Lazy loading: pre-load existing rows so unchanged files (same size) skip the
+    # expensive SHA256 hashing + image dimension decode on every re-scan. Only new
+    # or size-changed files pay that cost.
+    existing_rows = await db.fetchall(
+        "SELECT rel_path, size_bytes, sha256, width, height FROM data_items WHERE dataset_id = ?",
+        (dataset_id,)
+    )
+    existing = {
+        str(r["rel_path"]).replace("\\", "/"): r for r in existing_rows
+    }
+
     batch_size = config.performance.batch_size
     batch: list[tuple] = []
 
     for idx, file_path in enumerate(files):
         rel_path = file_path.relative_to(root_path)
+        rel_key = str(rel_path).replace("\\", "/")
 
         # Skip hidden folders (e.g. .crops) so generated crops never become items.
         if any(part.startswith(".") for part in rel_path.parts):
@@ -62,8 +74,16 @@ async def scan_dataset(db: Database, config: AppConfig) -> dict[str, int]:
         stat = file_path.stat()
         mime_type, _ = mimetypes.guess_type(str(file_path))
 
-        sha256_hash = await _compute_sha256(file_path)
-        width, height = await _get_image_dimensions(file_path)
+        prev = existing.get(rel_key)
+        if prev is not None and prev["size_bytes"] == stat.st_size:
+            # File unchanged since last scan -> reuse stored sha256/dimensions
+            # (lazy: avoids hashing + decoding this image again).
+            sha256_hash = prev["sha256"]
+            width = prev["width"]
+            height = prev["height"]
+        else:
+            sha256_hash = await _compute_sha256(file_path)
+            width, height = await _get_image_dimensions(file_path)
 
         metadata = {
             "width": width,

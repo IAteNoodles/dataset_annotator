@@ -195,12 +195,27 @@ async def create_field(annotation_id: int, field: AnnotationFieldCreate) -> Anno
     import json
     field_config_json = field.field_config_json or json.dumps({})
 
-    cursor = await db.execute_returning(
-        """INSERT INTO annotation_fields (annotation_id, field_name, field_value, datatype, field_config_json)
-           VALUES (?, ?, ?, ?, ?)""",
-        (annotation_id, field.field_name, field.field_value, field.datatype, field_config_json)
+    # One annotation holds a single field (name+value). Adding a new field
+    # replaces whatever field text was stored on this annotation before.
+    async with db.acquire() as conn:
+        try:
+            await conn.execute(
+                "DELETE FROM annotation_fields WHERE annotation_id = ?",
+                (annotation_id,)
+            )
+            cursor = await conn.execute(
+                """INSERT INTO annotation_fields (annotation_id, field_name, field_value, datatype, field_config_json)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (annotation_id, field.field_name, field.field_value, field.datatype, field_config_json)
+            )
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+    field_row = await db.fetchone(
+        "SELECT * FROM annotation_fields WHERE id = ?",
+        (cursor.lastrowid,)
     )
-    field_row = await db.fetchone("SELECT * FROM annotation_fields WHERE id = ?", (cursor.lastrowid,))
     return AnnotationFieldResponse(**field_row)
 
 

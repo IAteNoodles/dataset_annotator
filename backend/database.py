@@ -229,19 +229,31 @@ class Database:
 
     async def execute(self, query: str, params: tuple = ()) -> None:
         async with self.acquire() as conn:
-            await conn.execute(query, params)
-            await conn.commit()
+            try:
+                await conn.execute(query, params)
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
 
     async def execute_returning(self, query: str, params: tuple = ()) -> aiosqlite.Cursor:
         async with self.acquire() as conn:
-            cursor = await conn.execute(query, params)
-            await conn.commit()
-            return cursor
+            try:
+                cursor = await conn.execute(query, params)
+                await conn.commit()
+                return cursor
+            except Exception:
+                await conn.rollback()
+                raise
 
     async def executemany(self, query: str, params_list: list[tuple]) -> None:
         async with self.acquire() as conn:
-            await conn.executemany(query, params_list)
-            await conn.commit()
+            try:
+                await conn.executemany(query, params_list)
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
 
     async def fetchone(self, query: str, params: tuple = ()) -> dict[str, Any] | None:
         async with self.acquire() as conn:

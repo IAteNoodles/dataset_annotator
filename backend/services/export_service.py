@@ -23,6 +23,8 @@ async def run_full_export(
     dataset_id: int,
     push_s3: bool,
     formats: list[str],
+    export_mode: str = "annotated",
+    verify_images: bool = False,
 ) -> str:
     export_id = str(uuid.uuid4())[:8]
     _export_status[export_id] = {
@@ -37,7 +39,7 @@ async def run_full_export(
         "push_s3": push_s3,
     }
 
-    asyncio.create_task(_run_full_export_task(db, config, dataset_id, export_id, push_s3, formats))
+    asyncio.create_task(_run_full_export_task(db, config, dataset_id, export_id, push_s3, formats, export_mode, verify_images))
     return export_id
 
 
@@ -48,6 +50,8 @@ async def _run_full_export_task(
     export_id: str,
     push_s3: bool,
     formats: list[str],
+    export_mode: str = "annotated",
+    verify_images: bool = False,
 ):
     try:
         await _update_export_status(export_id, progress=0.1, current_step="fetching data")
@@ -63,7 +67,11 @@ async def _run_full_export_task(
 
         await _update_export_status(export_id, progress=0.2, current_step="exporting to parquet")
 
-        result = await parquet_exporter.export_full(dataset_id, output_path, formats)
+        result = await parquet_exporter.export_full(dataset_id, output_path, formats, export_mode=export_mode, verify_images=verify_images)
+
+        report_path = None
+        if verify_images and "parquet" in result:
+            report_path = await parquet_exporter.verify_exported_images(Path(result["parquet"]))
 
         await _update_export_status(export_id, progress=0.6, current_step="creating manifest")
 
@@ -109,6 +117,8 @@ async def _run_full_export_task(
         )
 
         output_paths = list(result.values()) + [str(manifest_path)]
+        if report_path:
+            output_paths.append(str(report_path))
 
         if push_s3 and config.s3 and config.s3.enabled:
             await _update_export_status(export_id, progress=0.9, current_step="uploading to s3")
@@ -121,7 +131,11 @@ async def _run_full_export_task(
 
                 await db.execute(
                     """UPDATE export_cursors SET s3_export_path = ?, s3_manifest_path = ?
-                       WHERE dataset_id = ? AND export_type = 'full' ORDER BY created_at DESC LIMIT 1""",
+                       WHERE id = (
+                           SELECT id FROM export_cursors
+                           WHERE dataset_id = ? AND export_type = 'full'
+                           ORDER BY created_at DESC LIMIT 1
+                       )""",
                     (s3_key, f"{s3_key}.manifest.json", dataset_id)
                 )
 
@@ -144,6 +158,8 @@ async def run_incremental_export(
     dataset_id: int,
     push_s3: bool,
     formats: list[str],
+    export_mode: str = "annotated",
+    verify_images: bool = False,
 ) -> str:
     export_id = str(uuid.uuid4())[:8]
     _export_status[export_id] = {
@@ -158,7 +174,7 @@ async def run_incremental_export(
         "push_s3": push_s3,
     }
 
-    asyncio.create_task(_run_incremental_export_task(db, config, dataset_id, export_id, push_s3, formats))
+    asyncio.create_task(_run_incremental_export_task(db, config, dataset_id, export_id, push_s3, formats, export_mode, verify_images))
     return export_id
 
 
@@ -169,6 +185,8 @@ async def _run_incremental_export_task(
     export_id: str,
     push_s3: bool,
     formats: list[str],
+    export_mode: str = "annotated",
+    verify_images: bool = False,
 ):
     try:
         await _update_export_status(export_id, progress=0.1, current_step="fetching cursor")
@@ -191,7 +209,11 @@ async def _run_incremental_export_task(
         base_filename = f"{dataset_name}_inc_{since_id}_{timestamp}"
         output_path = output_dir / base_filename
 
-        result = await parquet_exporter.export_incremental(dataset_id, output_path, since_id, formats)
+        result = await parquet_exporter.export_incremental(dataset_id, output_path, since_id, formats, export_mode=export_mode, verify_images=verify_images)
+
+        report_path = None
+        if verify_images and "parquet" in result:
+            report_path = await parquet_exporter.verify_exported_images(Path(result["parquet"]))
 
         await _update_export_status(export_id, progress=0.6, current_step="creating manifest")
 
@@ -238,6 +260,8 @@ async def _run_incremental_export_task(
         )
 
         output_paths = list(result.values()) + [str(manifest_path)]
+        if report_path:
+            output_paths.append(str(report_path))
 
         if push_s3 and config.s3 and config.s3.enabled:
             await _update_export_status(export_id, progress=0.9, current_step="uploading to s3")

@@ -16,7 +16,7 @@ COPY frontend /app/frontend
 
 RUN mkdir -p /app/data /app/dataset /app/exports /app/snapshots /app/crops
 
-ENV DATASET_ANNOTATOR_CONFIG=/app/config/dataset_config.yaml
+ENV DATASET_ANNOTATOR_CONFIG=/app/config/dataset_config.example.yaml
 ENV DATASET_ANNOTATOR_DB=/app/data/annotator.db
 ENV DATASET_ANNOTATOR_DATASET_PATH=/app/dataset
 

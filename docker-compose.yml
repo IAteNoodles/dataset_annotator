@@ -14,7 +14,7 @@ services:
     environment:
       # Folder auto-opened and scanned on startup. Change at runtime in the UI.
       DATASET_ANNOTATOR_DATASET_PATH: /app/dataset
-      DATASET_ANNOTATOR_CONFIG: /app/config/dataset_config.yaml
+      DATASET_ANNOTATOR_CONFIG: /app/config/dataset_config.example.yaml
       DATASET_ANNOTATOR_DB: /app/data/annotator.db
       # Optional S3 creds (export to AWS S3 from the Operations panel)
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}

@@ -28,12 +28,16 @@ class S3Exporter:
         )
 
         session = boto3.Session()
+
+        def _none_if_empty(v):
+            return v if v else None
+
         self.s3 = session.client(
             "s3",
             region_name=s3_config.region,
-            endpoint_url=getattr(s3_config, "endpoint_url", None),
-            aws_access_key_id=getattr(s3_config, "access_key_id", None),
-            aws_secret_access_key=getattr(s3_config, "secret_access_key", None),
+            endpoint_url=_none_if_empty(getattr(s3_config, "endpoint_url", None)),
+            aws_access_key_id=_none_if_empty(getattr(s3_config, "access_key_id", None)),
+            aws_secret_access_key=_none_if_empty(getattr(s3_config, "secret_access_key", None)),
             config=boto_config,
         )
         self.bucket = s3_config.bucket

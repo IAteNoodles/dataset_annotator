@@ -183,7 +183,7 @@ function seedExpanded(nodes, prefix, depth) {
   nodes.forEach(n => {
     if (n.type === 'dir') {
       const key = prefix + '/' + n.name;
-      if (depth < 1) treeExpanded.add(key);
+      treeExpanded.add(key);
       seedExpanded(n.children, key, depth + 1);
     }
   });
@@ -1320,9 +1320,8 @@ async function addField() {
   const ann = annotations.find(a => a.id === selectedAnnotationId);
   
   if (ann && ann.localOnly) {
-    // Local annotation - store field locally
-    if (!ann.fields) ann.fields = {};
-    ann.fields[fieldName] = value;
+    // Local annotation - store a single field (replace any previous one).
+    ann.fields = { [fieldName]: value };
     ann.dirty = true;
     recordCategory(fieldName, value);
     resetFieldInputs();
@@ -1333,8 +1332,10 @@ async function addField() {
   
   const cfg = fieldConfigs.find(f => f.name === fieldName);
   const datatype = (cfg && cfg.datatype) || 'string';
-  
+
   try {
+    // One annotation holds a single field: the server replaces any existing
+    // field text on this annotation with the newly entered name+value.
     const r = await fetch(`${API_BASE}/api/annotations/${selectedAnnotationId}/fields`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1874,18 +1875,31 @@ function confirmExportModal(onOk) {
   pendingExportConfirm = onOk;
 }
 
+function getExportMode() {
+  const el = document.getElementById('exportMode');
+  return (el && (el.value === 'full' || el.value === 'annotated')) ? el.value : 'annotated';
+}
+
+function getVerifyImages() {
+  const el = document.getElementById('verifyImages');
+  return !!(el && el.checked);
+}
+
 async function runExport(pushS3) {
   if (!currentDatasetId) {
     setExportStatus('No dataset loaded');
     return;
   }
 
+  const exportMode = getExportMode();
+  const verifyImages = getVerifyImages();
+
   try {
     setExportStatus('Estimating export...');
     const estR = await fetch(`${API_BASE}/api/export/estimate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dataset_id: currentDatasetId, type: 'full' })
+      body: JSON.stringify({ dataset_id: currentDatasetId, type: 'full', export_mode: exportMode })
     });
     if (!estR.ok) {
       setExportStatus('Estimate failed: ' + (await estR.text()).slice(0, 300));
@@ -1894,25 +1908,30 @@ async function runExport(pushS3) {
     const est = await estR.json();
 
     const size = formatBytesHuman(est.estimated_size_gb);
+    const modeLabel = exportMode === 'full' ? 'ALL images (annotated + unannotated)' : 'only annotated images';
     showExportConfirm(`
+      <div style="margin-bottom:0.5rem;">Exporting <b>${modeLabel}</b>.</div>
       <div style="margin-bottom:0.5rem;">You are about to export <b>${est.image_count}</b> image file(s), <b>${est.annotation_count}</b> annotation(s), <b>${est.crop_count}</b> crop image(s).</div>
       <div style="margin-bottom:0.5rem;">Estimated size: <b>${size}</b></div>
       <div style="margin-bottom:0.5rem;">Estimated time: <b>~${est.estimated_time_minutes} min</b> (at 100 Mbps throughput)</div>
       <div style="margin-bottom:0.5rem;">Output file:</div>
       <code style="display:block;background:#0f172a;border:1px solid #334155;padding:0.4rem;border-radius:4px;word-break:break-all;font-size:0.7rem;">${est.output_path}</code>
+      ${verifyImages ? '<div style="margin-top:0.5rem;color:#fbbf24;">Verifying exported images after export (hash check).</div>' : ''}
       ${pushS3 ? '<div style="margin-top:0.5rem;color:#fbbf24;">Also uploading to S3 after export.</div>' : ''}
     `);
 
     confirmExportModal(async () => {
       closeExportConfirm();
-      await startExport(pushS3);
+      await startExport(pushS3, exportMode, verifyImages);
     });
   } catch (e) {
     setExportStatus('Export error: ' + e.message);
   }
 }
 
-async function startExport(pushS3) {
+async function startExport(pushS3, exportMode, verifyImages) {
+  exportMode = exportMode || getExportMode();
+  verifyImages = (typeof verifyImages === 'boolean') ? verifyImages : getVerifyImages();
   setExportStatus(pushS3 ? 'Configuring S3 then exporting...' : 'Running full export...');
   
   try {
@@ -1934,7 +1953,7 @@ async function startExport(pushS3) {
     const r = await fetch(`${API_BASE}/api/export/full`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dataset_id: currentDatasetId, type: 'full', push_s3: pushS3, formats: ['parquet'] })
+      body: JSON.stringify({ dataset_id: currentDatasetId, type: 'full', push_s3: pushS3, export_mode: exportMode, verify_images: verifyImages, formats: ['parquet'] })
     });
     const data = await r.json();
     if (!r.ok) {

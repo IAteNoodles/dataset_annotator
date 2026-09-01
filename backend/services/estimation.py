@@ -14,15 +14,14 @@ async def estimate_export_size(
     config: AppConfig,
     dataset_id: int,
     export_type: str,
+    export_mode: str = "annotated",
 ) -> ExportEstimateResponse:
+    # count annotations (and crops) for the selected export window
     if export_type == "full":
         annotation_count = await db.fetchval(
             """SELECT COUNT(*) FROM annotations a
                JOIN data_items di ON a.data_item_id = di.id
                WHERE di.dataset_id = ?""", (dataset_id,)
-        )
-        image_count = await db.fetchval(
-            "SELECT COUNT(*) FROM data_items WHERE dataset_id = ?", (dataset_id,)
         )
         crop_count = await db.fetchval(
             """SELECT COUNT(*) FROM annotations a
@@ -40,16 +39,37 @@ async def estimate_export_size(
                JOIN data_items di ON a.data_item_id = di.id
                WHERE di.dataset_id = ? AND a.id > ?""", (dataset_id, last_id)
         )
-        image_count = await db.fetchval(
-            """SELECT COUNT(DISTINCT di.id) FROM data_items di
-               JOIN annotations a ON a.data_item_id = di.id
-               WHERE di.dataset_id = ? AND a.id > ?""", (dataset_id, last_id)
-        )
         crop_count = await db.fetchval(
             """SELECT COUNT(*) FROM annotations a
                JOIN data_items di ON a.data_item_id = di.id
                WHERE di.dataset_id = ? AND a.id > ? AND a.crop_path IS NOT NULL""", (dataset_id, last_id)
         )
+
+    # number of images to include
+    if export_mode == "full":
+        # full mode: every data item, annotated or not
+        image_count = await db.fetchval(
+            "SELECT COUNT(*) FROM data_items WHERE dataset_id = ?", (dataset_id,)
+        )
+    else:
+        # annotated mode: only items that have at least one annotation
+        image_count = await db.fetchval(
+            """SELECT COUNT(DISTINCT di.id) FROM data_items di
+               WHERE di.dataset_id = ? AND EXISTS (
+                   SELECT 1 FROM annotations a WHERE a.data_item_id = di.id
+               )""", (dataset_id,)
+        )
+        if export_type != "full":
+            cursor = await db.fetchone(
+                "SELECT last_exported_annotation_id FROM export_cursors WHERE dataset_id = ? ORDER BY created_at DESC LIMIT 1",
+                (dataset_id,)
+            )
+            last_id = cursor["last_exported_annotation_id"] if cursor else 0
+            image_count = await db.fetchval(
+                """SELECT COUNT(DISTINCT di.id) FROM data_items di
+                   JOIN annotations a ON a.data_item_id = di.id
+                   WHERE di.dataset_id = ? AND a.id > ?""", (dataset_id, last_id)
+            )
 
     if annotation_count is None:
         annotation_count = 0

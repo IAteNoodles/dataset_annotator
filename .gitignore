@@ -10,3 +10,6 @@ pytest_output.txt
 *.db
 *.db-shm
 *.db-wal
+.env
+.opencode/
+config/dataset_config.yaml

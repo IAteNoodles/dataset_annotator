@@ -23,7 +23,7 @@ async def estimate_export(request: ExportEstimateRequest) -> ExportEstimateRespo
     from backend.services.estimation import estimate_export_size
     db = get_db()
     config = get_config()
-    return await estimate_export_size(db, config, request.dataset_id, request.type)
+    return await estimate_export_size(db, config, request.dataset_id, request.type, request.export_mode)
 
 
 @router.post("/export/full", response_model=ExportResponse)
@@ -31,7 +31,7 @@ async def export_full(request: ExportRequest) -> ExportResponse:
     from backend.services.export_service import run_full_export
     db = get_db()
     config = get_config()
-    export_id = await run_full_export(db, config, request.dataset_id, request.push_s3, request.formats)
+    export_id = await run_full_export(db, config, request.dataset_id, request.push_s3, request.formats, request.export_mode, request.verify_images)
     return ExportResponse(export_id=export_id, status="started", message="Full export started")
 
 
@@ -40,7 +40,7 @@ async def export_incremental(request: ExportRequest) -> ExportResponse:
     from backend.services.export_service import run_incremental_export
     db = get_db()
     config = get_config()
-    export_id = await run_incremental_export(db, config, request.dataset_id, request.push_s3, request.formats)
+    export_id = await run_incremental_export(db, config, request.dataset_id, request.push_s3, request.formats, request.export_mode, request.verify_images)
     return ExportResponse(export_id=export_id, status="started", message="Incremental export started")
 
 
@@ -210,25 +210,70 @@ async def create_s3_bucket(request: S3CreateBucketRequest) -> S3CreateBucketResp
 
 @router.post("/s3/save-config", response_model=S3SaveConfigResponse)
 async def save_s3_config(request: S3SaveConfigRequest) -> S3SaveConfigResponse:
-    from backend.config import AppConfig, S3Config
-    config = get_config()
-    
-    # Update the config with new S3 settings
-    new_s3_config = S3Config(**request.config.model_dump())
-    updated_config = config.model_copy()
-    updated_config.s3 = new_s3_config
-    
-    # Save to YAML file
     import yaml
     from pathlib import Path
+    from backend.config import S3Config
+    from backend.deps import set_config
+    config = get_config()
+
+    # Update the config with new S3 settings.
+    new_s3_config = S3Config(**request.config.model_dump())
+
+    # Apply to the LIVE in-memory config so subsequent operations (e.g. S3 push
+    # right after export) use these credentials without a restart.
+    config.s3 = new_s3_config
+    set_config(config)
+
+    # Save a redacted copy to the YAML file (secrets are not written to disk).
+    updated_config = config.model_copy()
+    updated_config.s3 = new_s3_config
+
     config_path = Path("config/dataset_config.yaml")
-    
+
     config_dict = updated_config.model_dump(mode="json")
+    if config_dict.get("s3"):
+        config_dict["s3"]["access_key_id"] = ""
+        config_dict["s3"]["secret_access_key"] = ""
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
-    
+
+    # Persist credentials to .env so they survive a server restart. Secrets are
+    # loaded back via pydantic-settings (Settings) in backend/config.load_config.
+    _write_s3_env(
+        access_key_id=request.config.access_key_id,
+        secret_access_key=request.config.secret_access_key,
+        endpoint_url=request.config.endpoint_url,
+    )
+
     return S3SaveConfigResponse(
         success=True,
-        message="S3 configuration saved! Restart required for changes to take effect.",
+        message="S3 configuration saved and applied.",
         config=request.config
     )
+
+
+def _write_s3_env(access_key_id: str | None, secret_access_key: str | None, endpoint_url: str | None) -> None:
+    """Merge S3 credentials into the project .env file (created if missing)."""
+    from pathlib import Path
+    env_path = Path(".env")
+    lines = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    updates = {
+        "s3_access_key_id": access_key_id,
+        "s3_secret_access_key": secret_access_key,
+        "s3_endpoint_url": endpoint_url,
+    }
+
+    def _upsert(rows: list[str], key: str, value: str | None) -> list[str]:
+        prefix = key + "="
+        out = [r for r in rows if not r.strip().startswith(prefix)]
+        if value is not None and value.strip() != "":
+            out.append(f"{prefix}{value.strip()}")
+        return out
+
+    for key, value in updates.items():
+        lines = _upsert(lines, key, value)
+
+    env_path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")

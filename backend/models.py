@@ -149,6 +149,7 @@ class FieldCategoryResponse(BaseModel):
 class ExportEstimateRequest(BaseModel):
     dataset_id: int
     type: Literal["full", "incremental"]
+    export_mode: Literal["annotated", "full"] = "annotated"
 
 
 class ExportEstimateResponse(BaseModel):
@@ -164,6 +165,8 @@ class ExportRequest(BaseModel):
     dataset_id: int
     type: Literal["full", "incremental"]
     push_s3: bool = False
+    export_mode: Literal["annotated", "full"] = "annotated"
+    verify_images: bool = False
     formats: list[Literal["parquet", "arrow"]] = Field(default_factory=lambda: ["parquet"])
 
 

@@ -244,6 +244,9 @@ class S3Config(BaseModel):
     fetch: S3FetchConfig = Field(default_factory=S3FetchConfig)
     push: S3PushConfig = Field(default_factory=S3PushConfig)
     max_bandwidth_mbps: int = 0
+    access_key_id: str = ""
+    secret_access_key: str = ""
+    endpoint_url: str = ""
 
 
 class SuggestionsConfig(BaseModel):
@@ -308,6 +311,9 @@ class Settings(BaseSettings):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     s3_endpoint_url: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_endpoint_url: str | None = None
 
 
 def load_config(config_path: str | Path) -> AppConfig:
@@ -323,12 +329,12 @@ def load_config(config_path: str | Path) -> AppConfig:
 
     if raw_config.get("s3") and raw_config["s3"].get("enabled"):
         s3_config = raw_config["s3"]
-        if settings.s3_access_key_id:
-            s3_config.setdefault("access_key_id", settings.s3_access_key_id)
-        if settings.s3_secret_access_key:
-            s3_config.setdefault("secret_access_key", settings.s3_secret_access_key)
-        if settings.s3_endpoint_url:
-            s3_config.setdefault("endpoint_url", settings.s3_endpoint_url)
+        if settings.s3_access_key_id or settings.aws_access_key_id:
+            s3_config["access_key_id"] = settings.s3_access_key_id or settings.aws_access_key_id
+        if settings.s3_secret_access_key or settings.aws_secret_access_key:
+            s3_config["secret_access_key"] = settings.s3_secret_access_key or settings.aws_secret_access_key
+        if settings.s3_endpoint_url or settings.aws_endpoint_url:
+            s3_config["endpoint_url"] = settings.s3_endpoint_url or settings.aws_endpoint_url
 
     return AppConfig(**raw_config)
 

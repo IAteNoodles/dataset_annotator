@@ -1,0 +1,377 @@
+﻿# dataset_config.example.yaml
+# =============================================================================
+# DATASET ANNOTATOR - COMPLETE CONFIGURATION
+# =============================================================================
+# All paths relative to this file unless absolute.
+# Comments explain every knob. Modify and restart server to apply.
+# =============================================================================
+
+dataset:
+  # REQUIRED: Unique dataset identifier (used in DB, S3 paths, exports)
+  name: "medical_documents_v1"
+  
+  # REQUIRED: Plugin type - determines UI and data handling
+  # Built-in: 'image', 'text', 'audio' | Custom: plugin directory name
+  plugin: "image"
+  
+  # REQUIRED: Root path to source data
+  path: "/path/to/images"
+  
+  # Recursively scan subdirectories
+  recursive: true
+  
+  # File extensions to include (case-insensitive). Empty = all files.
+  extensions: [".jpg", ".jpeg", ".png", ".tiff", ".bmp", ".webp"]
+  
+  # Sort order for gallery/navigation: 'path' | 'mtime' | 'size' | 'random'
+  sort_by: "path"
+  
+  # Pagination: items per page (0 = no limit)
+  page_size: 100
+
+# =============================================================================
+# PLUGIN CONFIGURATION: IMAGE
+# =============================================================================
+plugin_config:
+  # Annotation geometry type
+  # rectangle_box: [x1,y1,x2,y2] axis-aligned
+  # rotated_box: [cx,cy,w,h,angle] 
+  # polygon: [[x1,y1],[x2,y2],...] min 3 points
+  # point: [x,y]
+  # line: [[x1,y1],[x2,y2]]
+  annotation_mode: "rectangle_box"
+  
+  # Allow annotations to overlap/intersect
+  allow_intersections: true
+  
+  # Allow moving/resizing after creation
+  allow_movement: true
+  
+  # Snap to grid/other annotations (pixels)
+  snap_threshold: 5
+  
+  # Minimum annotation size (prevents tiny accidental boxes)
+  min_annotation_size: 10
+  
+  # Display settings
+  display:
+    max_dimension: 2560      # Max display dimension (1440p)
+    show_grid: false
+    grid_size: 50
+    default_zoom: "fit"      # 'fit' | '100' | '200' | number
+    zoom_steps: [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4]
+  
+  # Crop settings
+  crops:
+    auto_save: true
+    output_dir: "crops"
+    naming_template: "{dataset}_{item_id}_{annotation_id}"
+    format: "png"
+    quality: 95
+    padding: 5
+    context_padding: 0
+
+# =============================================================================
+# ANNOTATION FIELDS
+# =============================================================================
+# Each field defines a column in the annotation panel.
+# internal=true ΓåÆ auto-populated, hidden by default
+# =============================================================================
+fields:
+  # ---- INTERNAL FIELDS (auto-populated) ----
+  - name: "coordinates"
+    label: "Coordinates"
+    datatype: "json"
+    internal: true
+    hidden: true
+    source: "geometry"
+    description: "Annotation geometry in plugin-specific format"
+  
+  - name: "file_path"
+    label: "Crop Path"
+    datatype: "string"
+    internal: true
+    hidden: true
+    source: "crop_path"
+    description: "Relative path to saved crop image"
+  
+  - name: "source_image"
+    label: "Source Image"
+    datatype: "string"
+    internal: true
+    hidden: true
+    source: "data_item_path"
+    description: "Original image file path"
+  
+  - name: "annotation_id"
+    label: "Annotation ID"
+    datatype: "number"
+    internal: true
+    hidden: true
+    source: "annotation_id"
+    description: "Internal annotation identifier"
+  
+  # ---- USER-FACING FIELDS ----
+  - name: "Text"
+    label: "Text Content"
+    datatype: "string"
+    required: true
+    provide_suggestions: true
+    suggestion_limit: 10
+    case_insensitive: true
+    placeholder: "Enter text from image..."
+    validation:
+      min_length: 1
+      max_length: 5000
+    description: "Transcribed text from the annotated region"
+  
+  - name: "Type"
+    label: "Entity Type"
+    datatype: "enum"
+    required: true
+    enum_values: ["Medicine", "Advice", "Frequency", "Other"]
+    dynamic_enum: true
+    case_insensitive: true
+    allow_custom: true
+    custom_label: "Other (specify)"
+    description: "Classification of the annotated entity"
+  
+  - name: "Dosage"
+    label: "Dosage"
+    datatype: "string"
+    required: false
+    provide_suggestions: true
+    suggestion_limit: 10
+    case_insensitive: true
+    placeholder: "e.g., 500mg, 10ml, 1 tablet"
+    visible_when:
+      field: "Type"
+      value: "Medicine"
+    description: "Dosage information"
+  
+  - name: "Frequency"
+    label: "Frequency"
+    datatype: "enum"
+    required: false
+    enum_values: ["Once daily", "Twice daily", "Three times daily", "Four times daily", "As needed", "Weekly", "Monthly", "Other"]
+    dynamic_enum: true
+    case_insensitive: true
+    visible_when:
+      field: "Type"
+      value: "Medicine"
+  
+  - name: "Route"
+    label: "Route"
+    datatype: "enum"
+    required: false
+    enum_values: ["Oral", "Topical", "Injection", "Inhalation", "Sublingual", "Rectal", "Other"]
+    dynamic_enum: true
+    case_insensitive: true
+    visible_when:
+      field: "Type"
+      value: "Medicine"
+  
+  - name: "Confidence"
+    label: "Confidence"
+    datatype: "number"
+    required: false
+    default: 1.0
+    min: 0.0
+    max: 1.0
+    step: 0.1
+    description: "Annotator confidence (0-1)"
+  
+  - name: "Notes"
+    label: "Notes"
+    datatype: "string"
+    required: false
+    multiline: true
+    placeholder: "Additional observations..."
+    description: "Free-form notes"
+
+# =============================================================================
+# UI CONFIGURATION
+# =============================================================================
+ui:
+  theme: "dark"                    # 'light' | 'dark' | 'auto'
+  language: "en"
+  
+  layout:
+    sidebar_width: 320
+    toolbar_position: "top"
+    show_thumbnails: true
+    thumbnail_size: 120
+    show_status_badges: true
+  
+  canvas:
+    type_colors:
+      Medicine: "#e74c3c"
+      Advice: "#3498db"
+      Frequency: "#f39c12"
+      Other: "#95a5a6"
+    default_color: "#2ecc71"
+    line_width: 2
+    fill_opacity: 0.15
+    show_labels: true
+    label_template: "{Type}: {Text}"
+    highlight_selected: true
+    highlight_color: "#fff"
+    highlight_width: 3
+  
+  shortcuts:
+    next_item: "ArrowRight"
+    prev_item: "ArrowLeft"
+    save: "Ctrl+S"
+    new_annotation: "N"
+    delete_annotation: "Delete"
+    undo: "Ctrl+Z"
+    redo: "Ctrl+Y"
+    zoom_in: "="
+    zoom_out: "-"
+    zoom_fit: "0"
+    pan: "Space"
+    toggle_sidebar: "B"
+    copy_annotation: "Ctrl+C"
+    paste_annotation: "Ctrl+V"
+    duplicate_annotation: "D"
+    lock_annotation: "L"
+  
+  field_panel:
+    auto_focus_first: true
+    show_field_descriptions: true
+    compact_mode: false
+    group_by_section: true
+  
+  # Operations panel visibility
+  operations:
+    show_export: true
+    show_s3_sync: true
+    show_recovery: true
+    show_snapshots: true
+    show_import: true
+
+# =============================================================================
+# SNAPSHOTS
+# =============================================================================
+snapshot:
+  enabled: true
+  interval: 100                    # Annotations between auto-snapshots
+  triggers: ["interval", "export", "shutdown", "manual"]
+  max_snapshots: 10
+  path: "./snapshots"
+  compress: true                   # gzip compression
+  verify: true                     # Verify after creation
+
+# =============================================================================
+# EXPORT
+# =============================================================================
+export:
+  output_dir: "./exports"
+  default_formats: ["parquet"]
+  
+  # RECOVERY-FIRST: Embed everything for standalone recovery
+  embed_source_images: true
+  embed_crops: true
+  
+  image_encoding:
+    format: "png"
+    quality: 100
+    max_dimension: 0               # 0 = original (Γëñ50MB, Γëñ1440p)
+  
+  parquet:
+    compression: "zstd"
+    compression_level: 3
+    row_group_size: 50000
+    data_page_size: 524288
+    write_statistics: true
+    use_dictionary: true
+    dictionary_pagesize_limit: 1048576
+    write_page_checksums: true
+    write_footer_checksums: true
+  
+  arrow:
+    compression: "zstd"
+    compression_level: 3
+  
+  flatten_fields: true
+  partition_by: ["dataset_name"]
+  only_completed: false
+  include_skipped: true
+  include_pending: true
+  include_internal_fields: true
+  verify_after_write: true
+  generate_manifest: true
+  
+  # Estimation (shown in UI before export)
+  estimation:
+    sample_rows: 1000              # Sample for size estimation
+    include_images_in_estimate: true
+  
+  incremental:
+    enabled: true
+    strategy: "annotation_updated_at"
+    include_item_status_changes: true
+    min_interval_minutes: 30
+    full_export_every: 10
+
+# =============================================================================
+# S3 INTEGRATION
+# =============================================================================
+s3:
+  enabled: false
+  bucket: "my-annotation-datasets"
+  region: "us-east-1"
+  prefix: "datasets/"
+  
+  # Multipart upload
+  multipart_threshold_mb: 100
+  multipart_chunksize_mb: 50
+  
+  # Startup fetch
+  fetch_on_startup: false
+  fetch:
+    exports: true
+    snapshots: true
+    cursor: true
+    verify_checksums: true
+  
+  # Push after operations
+  push:
+    exports: true
+    snapshots: true
+    cursor: true
+    overwrite: false
+  
+  # Bandwidth limit (0 = unlimited)
+  max_bandwidth_mbps: 0
+
+# =============================================================================
+# SUGGESTIONS
+# =============================================================================
+suggestions:
+  enabled: true
+  debounce_ms: 300
+  max_suggestions: 10
+  min_chars: 1
+  ranking: "frequency"             # 'frequency' | 'recency' | 'alphabetical'
+  scope: "current_dataset"         # 'current_dataset' | 'all_datasets'
+  fuzzy_threshold: 0.8
+  pre_populate_sources: []
+
+# =============================================================================
+# PERFORMANCE
+# =============================================================================
+performance:
+  wal_mode: true
+  busy_timeout: 5000
+  pool_size: 5
+  batch_size: 1000
+  auto_vacuum: true
+
+# =============================================================================
+# PLUGINS
+# =============================================================================
+plugins:
+  search_paths: ["./plugins", "~/.dataset_annotator/plugins"]
+  builtin: ["image", "text", "audio"]
+  overrides: {}

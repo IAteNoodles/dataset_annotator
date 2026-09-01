@@ -385,6 +385,7 @@ def import_cmd():
 def import_preview(config: str, format: str, file: str):
     """Preview import"""
     file_content = Path(file).read_text()
+    from backend.services.import_service import preview_import
     result = asyncio.run(preview_import(format, file_content))
 
     click.echo(f"Annotations: {result['annotation_count']}")
@@ -417,6 +418,7 @@ def import_run(config: str, dataset: str | None, format: str, mapping: list[str]
             field_mapping[src] = dst
 
     file_content = Path(file).read_text()
+    from backend.services.import_service import execute_import
     result = asyncio.run(execute_import(db, cfg, 1, format, file_content, field_mapping))
 
     click.echo(f"Imported: {result['imported']}")
